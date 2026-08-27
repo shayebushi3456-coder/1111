@@ -1,0 +1,90 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: task-pilot-config
+  namespace: task-pilot
+data:
+  config.example.yaml: |
+    server:
+      addr: ":8080"
+    database:
+      path: "/app/data/tasks.db"
+    kubernetes:
+      namespace: "task-pilot"
+      service_account: "task-pilot-executor"
+      default_image: "alpine:3.20"
+      default_timeout_seconds: 3600
+      backoff_limit: 0
+      ttl_seconds_after_finished: 86400
+    file_transfer:
+      workspace_mount_path: "/workspace"
+      storage_dir: "/app/data/files"
+      max_file_size_mb: 10
+      service_base_url: "http://task-pilot.task-pilot.svc.cluster.local:8080"
+    scheduler:
+      reconcile_interval_seconds: 10
+      max_concurrent_tasks: 20
+    eval:
+      encryption_secret: ""
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: task-pilot
+  namespace: task-pilot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: task-pilot
+  template:
+    metadata:
+      labels:
+        app: task-pilot
+    spec:
+      serviceAccountName: task-pilot-server
+      containers:
+        - name: server
+          image: <TASK_PILOT_IMAGE>
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            - name: APP_CONFIG
+              value: /app/configs/config.example.yaml
+            # 加密被测端点 api_key 的密钥；生产建议改为 valueFrom.secretKeyRef 引用 K8s Secret。
+            - name: EVAL_ENCRYPTION_SECRET
+              value: "change-me-in-production"
+            # 评测模型（内置端点）的 api_key；仅在派发评测 Job 时注入其 env，不入库、不出接口。
+            - name: EVAL_MODEL_API_KEY
+              value: "change-me-in-production"
+            - name: HTTP_PROXY
+              value: "http://generalsvc-task-proxy-v1.t-skyinfer-xyli05.svc.cluster.local:9001"
+            - name: HTTPS_PROXY
+              value: "http://generalsvc-task-proxy-v1.t-skyinfer-xyli05.svc.cluster.local:9001"
+            - name: NO_PROXY
+              value: ".svc,.cluster.local,localhost,127.0.0.1,kubernetes.default.svc,kubernetes.default.svc.cluster.local,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,172.17.0.1"
+          volumeMounts:
+            - name: config
+              mountPath: /app/configs
+            - name: sqlite-data
+              mountPath: /app/data
+      volumes:
+        - name: config
+          configMap:
+            name: task-pilot-config
+        - name: sqlite-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: task-pilot
+  namespace: task-pilot
+spec:
+  selector:
+    app: task-pilot
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080

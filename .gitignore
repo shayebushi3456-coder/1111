@@ -1,0 +1,14 @@
+.DS_Store
+*.zip
+
+task-pilot/data/
+task-pilot/bin/
+task-pilot/*.db
+task-pilot/*.db-shm
+task-pilot/*.db-wal
+task-pilot/.env
+
+task-pilot-web/node_modules/
+task-pilot-web/dist/
+task-pilot-web/*.local
+task-pilot-web/.env

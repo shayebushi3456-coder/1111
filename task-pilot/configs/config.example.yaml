@@ -1,0 +1,40 @@
+server:
+  addr: ":8081"
+database:
+  path: "./data/tasks.db"
+kubernetes:
+  namespace: "task-pilot"
+  service_account: "task-pilot-executor"
+  kubeconfig: ""
+  default_image: "registry-cn-beijing.siflow.cn/skyinfer/eval-pod-base:1.3.0-vscs-20260818-3484"
+  default_timeout_seconds: 3600
+  backoff_limit: 0
+  ttl_seconds_after_finished: 86400
+  # 执行器容器运行用户 UID。claude --dangerously-skip-permissions 拒绝以 root（UID 0）运行，
+  # 若执行器镜像默认以 root 启动，必须设置为非 root UID（如镜像里已有的普通用户 UID）
+  # 才能让默认测试/评测命令（internal/config/center.go 里的 claude -p --dangerously-skip-permissions）正常跳过权限确认。
+  # 设为 0 表示不设置 SecurityContext.RunAsUser，沿用镜像默认用户（可能仍是 root）。
+  executor_run_as_user: 1000
+  # 执行器镜像里 Playwright chromium 的固化安装目录（镜像构建时装的位置，例如
+  # `PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright playwright install chromium`）。
+  # 每个 Job 有独立的临时 $HOME（任务隔离要求，见上方 executor_run_as_user 对应的
+  # HOME 注入逻辑），Playwright 默认按 $HOME 找浏览器会在任务专属的空 $HOME 下找不到，
+  # 报 "Executable doesn't exist"。设置此项后会注入同名环境变量，让 Playwright 直接
+  # 用镜像里的固化路径，不受每任务独立 $HOME 影响。留空表示不注入。
+  executor_playwright_browsers_path: "/root/.cache/ms-playwright"
+file_transfer:
+  workspace_mount_path: "/workspace"
+  storage_dir: "./data/files"
+  max_file_size_mb: 300
+  service_base_url: "http://generalsvc-lumi-eval-auto-v1.t-skyinfer-xyli05.svc.cluster.local:8081"
+scheduler:
+  reconcile_interval_seconds: 10
+  # 全局并发上限：同时运行的用例任务（测试+评测）总数。<=0 表示不限流。
+  max_concurrent_tasks: 500
+  # 单请求（每个 EvalRun）并发上限：同一 run 同时运行的用例任务数，防止单个大请求
+  # 独占全局额度、饿死其他请求。<=0 表示该维度不限流。创建 EvalRun 时可用 max_concurrent 覆盖。
+  max_concurrent_per_run: 20
+eval:
+  # 用于加密被测端点 api_key 的密钥；生产请通过环境变量 EVAL_ENCRYPTION_SECRET 注入，切勿写入版本库。
+  encryption_secret: "dev"
+

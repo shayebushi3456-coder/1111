@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: task-pilot-server
+  namespace: task-pilot
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: task-pilot-executor
+  namespace: task-pilot
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: task-pilot-job-manager
+  namespace: task-pilot
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "delete", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "events"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: task-pilot-job-manager
+  namespace: task-pilot
+subjects:
+  - kind: ServiceAccount
+    name: task-pilot-server
+    namespace: task-pilot
+roleRef:
+  kind: Role
+  name: task-pilot-job-manager
+  apiGroup: rbac.authorization.k8s.io

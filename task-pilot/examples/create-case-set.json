@@ -1,0 +1,32 @@
+{
+  "name": "登录模块回归集",
+  "description": "覆盖登录相关用例",
+  "cases": [
+    {
+      "name": "正常登录",
+      "description": "使用 input 中的账号数据执行登录脚本并输出结果报告",
+      "level1_type": "信息处理类",
+      "level2_type": "知识检索",
+      "task_types": ["单步", "多步"],
+      "difficulty": "中",
+      "file_ids": [],
+      "checkpoints": [
+        "输出应包含明确的登录成功提示",
+        "结果报告中不得出现明文密码",
+        "异常输入时应给出可读错误而非崩溃"
+      ]
+    },
+    {
+      "name": "空密码登录",
+      "description": "使用空密码执行登录并观察系统反馈",
+      "level1_type": "信息处理类",
+      "level2_type": "信息生成",
+      "task_types": ["单步"],
+      "difficulty": "易",
+      "file_ids": [],
+      "checkpoints": [
+        "应拒绝空密码并提示密码不能为空"
+      ]
+    }
+  ]
+}

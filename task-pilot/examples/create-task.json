@@ -1,0 +1,7 @@
+{
+  "request_id": "demo-001",
+  "name": "hello-task-pilot",
+  "image": "alpine:3.20",
+  "command": "mkdir -p output && echo hello-from-task-pilot > output/result.txt && ls -R .",
+  "timeout_seconds": 600
+}

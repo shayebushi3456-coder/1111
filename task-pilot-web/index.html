@@ -1,0 +1,857 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<title>WorkEval · Agent 自动化评测平台</title>
+</head>
+<body>
+
+<div class="app-shell">
+
+  <!-- ============ Sidebar ============ -->
+  <aside class="sidebar">
+    <div class="brand">
+      <img class="brand-mark-img" src="/favicon.svg" alt="WorkEval" width="30" height="30">
+      <div class="brand-text">
+        <div class="brand-title">WorkEval</div>
+        <div class="brand-sub">agent 自动化评测控制台</div>
+      </div>
+    </div>
+
+    <nav class="nav-group">
+      <div class="nav-item active" data-view="dashboard">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
+        概览
+      </div>
+      <div class="nav-item" data-view="evalruns">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 12l4 4L19 6"/></svg>
+        评测执行
+        <span class="count" id="nav-count-evalruns">--</span>
+      </div>
+      <div class="nav-item" data-view="casesets">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+        用例集
+        <span class="count" id="nav-count-casesets">--</span>
+      </div>
+      <div class="nav-item" data-view="leaderboard">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 21h8M12 17v4M7 4h10l-1 7a4 4 0 01-8 0L7 4z"/><path d="M17 5h3a2 2 0 01-2 4M7 5H4a2 2 0 002 4"/></svg>
+        模型 Leaderboard
+      </div>
+    </nav>
+
+    <div class="nav-group">
+      <div class="nav-label">配置中心</div>
+      <div class="nav-item" data-view="target-endpoints">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg>
+        被测模型端点
+      </div>
+      <div class="nav-item" data-view="eval-endpoints">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2l3 6 6 1-4.5 4.5L18 20l-6-3-6 3 1.5-6.5L3 9l6-1z"/></svg>
+        评测模型端点
+      </div>
+      <div class="nav-item" data-view="prompts">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 4h16v12H8l-4 4V4z"/></svg>
+        评测 Prompt
+      </div>
+      <div class="nav-item" data-view="mcp-servers">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="13" width="16" height="7" rx="1.5"/><circle cx="8" cy="7.5" r="1"/><circle cx="8" cy="16.5" r="1"/></svg>
+        MCP 服务器
+      </div>
+      <div class="nav-item" data-view="skills">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2l2.5 5.5L20 9l-5.5 2.5L12 17l-2.5-5.5L4 9l5.5-1.5z"/><path d="M19 15l1 2 2 1-2 1-1 2-1-2-2-1 2-1z"/></svg>
+        Skill
+      </div>
+      <div class="nav-item" data-view="env-vars">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><circle cx="12" cy="12" r="4"/><path d="M7.5 7.5l1.5 1.5M15 15l1.5 1.5M16.5 7.5L15 9M9 15l-1.5 1.5"/></svg>
+        环境变量
+      </div>
+    </div>
+
+    <div class="sidebar-footer">
+      <svg class="avatar-sm" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="#F5A524"/><text x="16" y="21" text-anchor="middle" font-size="13" font-weight="700" fill="#1C1305" font-family="monospace">RL</text></svg>
+      <div class="user-meta">
+        <div class="user-name">rli02</div>
+        <div class="user-role">平台管理员</div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ============ Main column ============ -->
+  <div class="main-col">
+    <div class="topbar">
+      <div class="crumbs" id="crumbs"><b>概览</b></div>
+      <div class="topbar-actions">
+        <div class="search-box">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+          <input type="text" placeholder="搜索评测执行 / 用例集 / 端点…" id="global-search">
+        </div>
+        <button class="icon-btn" id="theme-toggle" title="切换主题">
+          <svg id="theme-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" style="display:none"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+          <svg id="theme-icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12.5A8.5 8.5 0 1 1 11.5 3a7 7 0 0 0 9.5 9.5z"/></svg>
+        </button>
+        <button class="icon-btn" title="通知">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 8a6 6 0 1112 0c0 3 1 5 2 6H4c1-1 2-3 2-6z"/><path d="M10 20a2 2 0 004 0"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="content">
+
+      <!-- ============ DASHBOARD ============ -->
+      <section class="view active" id="view-dashboard">
+        <div class="page-head">
+          <div>
+            <h1 class="page-title">评测概览</h1>
+            <p class="page-desc">跨所有评测执行的实时统计，反映被测 agent 的整体质量趋势与当前调度负载。</p>
+          </div>
+          <button class="btn btn-primary" data-view-link="evalruns" data-action="new-evalrun">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+            新建评测执行
+          </button>
+        </div>
+
+        <div class="stat-grid">
+          <div class="stat-hero">
+            <div class="stat-hero-top">
+              <div>
+                <div class="stat-hero-label">已生成分析报告</div>
+                <div class="stat-hero-value" id="stat-reported">--</div>
+                <div class="stat-hero-sub" id="stat-reported-sub">评测报告由人工审阅得出结论，此处仅统计已产出报告数</div>
+              </div>
+            </div>
+            <div class="mini-bars" id="stat-hero-bars"></div>
+          </div>
+
+          <div class="stat-card">
+            <div class="stat-card-label">当前运行中用例</div>
+            <div class="stat-card-value" id="stat-running">--</div>
+            <div class="stat-card-foot"><span class="dot run"></span><span id="stat-running-foot">--</span></div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-card-label">排队等待中</div>
+            <div class="stat-card-value" id="stat-pending">--</div>
+            <div class="stat-card-foot"><span class="dot" style="background:var(--queue)"></span>等待调度器出队</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-card-label">活跃用例集</div>
+            <div class="stat-card-value" id="stat-casesets">--</div>
+            <div class="stat-card-foot"><span class="muted" id="stat-cases-total">--</span></div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-card-label">异常终止用例</div>
+            <div class="stat-card-value" id="stat-errored" style="color:var(--err)">--</div>
+            <div class="stat-card-foot"><span class="dot err"></span>需要人工排查</div>
+          </div>
+        </div>
+
+        <div class="two-col">
+          <div class="panel">
+            <div class="panel-head">
+              <h3>最近评测执行</h3>
+              <a href="#" class="link-inline" data-view-link="evalruns">查看全部 →</a>
+            </div>
+            <div class="panel-body" id="dashboard-recent-runs"></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <h3>当前正在执行的用例</h3>
+            </div>
+            <div class="panel-body pad" id="dashboard-running-cases" style="display:flex;flex-direction:column;gap:12px;"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ EVAL RUNS LIST ============ -->
+      <section class="view" id="view-evalruns">
+        <div class="page-head">
+          <div>
+            <h1 class="page-title">评测执行</h1>
+            <p class="page-desc">每个执行对应一次用例集的二段式评测（测试任务 + 评测任务），支持并发调度、随时停止。</p>
+          </div>
+          <div class="flex gap-8" style="align-items:center;">
+            <span class="muted mono" id="er-selected-count" style="font-size:11.5px;display:none;">已选 0 项</span>
+            <button class="btn btn-ghost btn-sm" id="er-batch-delete-btn" disabled style="color:var(--err);border-color:var(--err-soft);">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>
+              批量删除
+            </button>
+            <button class="btn btn-ghost btn-sm" id="btn-preview-local-trace">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>
+              预览 trace
+            </button>
+            <button class="btn btn-primary" id="btn-new-evalrun">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+              新建评测执行
+            </button>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="row-list-head">
+            <div style="display:flex;align-items:center;"><input type="checkbox" id="er-select-all"></div><div>执行名称 / 用例集</div><div>状态</div><div>进度</div><div>更新时间</div><div></div>
+          </div>
+          <div class="row-list" id="evalrun-list"></div>
+        </div>
+      </section>
+
+      <!-- ============ EVAL RUN DETAIL ============ -->
+      <section class="view" id="view-evalrun-detail">
+        <div class="page-head">
+          <div>
+            <div class="flex gap-8" style="align-items:center;margin-bottom:6px;">
+              <button class="icon-btn btn-sm" style="width:30px;height:30px" data-view-link="evalruns">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
+              </button>
+              <h1 class="page-title" id="erd-title" style="margin:0;">加载中…</h1>
+              <span class="badge" id="erd-status-badge"></span>
+            </div>
+            <p class="page-desc mono" id="erd-meta"></p>
+          </div>
+          <div class="flex gap-8">
+            <button class="btn btn-danger" id="erd-stop-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
+              停止执行
+            </button>
+            <button class="btn btn-ghost" id="erd-delete-btn">删除</button>
+          </div>
+        </div>
+
+        <div class="two-col" style="margin-bottom:18px;">
+          <div class="stat-card">
+            <div class="stat-card-label">整体进度</div>
+            <div class="flex-between" style="margin:6px 0 8px;">
+              <span class="stat-card-value" id="erd-progress-text" style="font-size:18px;">1 / 3</span>
+              <span class="muted mono" id="erd-progress-pct" style="font-size:12px;">33%</span>
+            </div>
+            <div class="progress-bar"><span id="erd-progress-bar" style="width:33%"></span></div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-card-label">配置</div>
+            <div style="font-size:12.5px;line-height:2;margin-top:4px;" id="erd-config-lines"></div>
+          </div>
+        </div>
+
+        <!-- ============ 机评总分区块（score_status='OK' 才计入统计，见 issueTags.ts） ============ -->
+        <div id="erd-score-section" style="display:none;">
+          <div class="stat-grid" style="grid-template-columns:1.6fr 1fr 1fr 1fr;margin-bottom:18px;">
+            <div class="stat-hero">
+              <div>
+                <div class="stat-hero-top">
+                  <div>
+                    <div class="stat-hero-label">机评总分（均分）</div>
+                    <div class="stat-hero-value" id="erd-score-avg">--</div>
+                    <div class="stat-hero-sub" id="erd-score-sub"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-card-label">最高分用例</div>
+              <div class="stat-card-value" id="erd-score-max">--</div>
+              <div class="stat-card-foot" id="erd-score-max-name"></div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-card-label">最低分用例</div>
+              <div class="stat-card-value" id="erd-score-min">--</div>
+              <div class="stat-card-foot" id="erd-score-min-name"></div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-card-label">未参与统计用例</div>
+              <div class="stat-card-value" id="erd-score-na">--</div>
+              <div class="stat-card-foot muted">历史数据/解析失败不计入均分</div>
+            </div>
+          </div>
+
+          <div class="two-col" style="margin-bottom:18px;">
+            <div class="panel">
+              <div class="panel-head">
+                <h3>本次运行 · Top 标签</h3>
+                <span class="sub muted mono" id="erd-issues-sub"></span>
+              </div>
+              <div class="panel-body" id="erd-top-issues"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-head"><h3>分数分布</h3></div>
+              <div class="panel-body pad" id="erd-score-dist"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h3>用例执行明细</h3>
+            <div class="flex gap-8" style="align-items:center;">
+              <span class="muted mono" id="erd-selected-count" style="font-size:11.5px;display:none;">已选 0 项</span>
+              <button class="btn btn-ghost btn-sm" id="erd-export-btn" disabled>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16"/></svg>
+                批量导出产物
+              </button>
+            </div>
+          </div>
+          <div class="panel-body case-table-scroll">
+            <table class="case-table">
+              <thead><tr>
+                <th class="col-check"><input type="checkbox" id="erd-select-all"></th>
+                <th class="col-idx">#</th><th class="col-name">用例</th><th class="col-status">状态</th><th class="col-score">机评得分</th><th class="col-issues">机评标签</th><th class="col-action">产物</th><th class="col-action">trace</th><th class="col-action"></th>
+              </tr></thead>
+              <tbody id="erd-case-table-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ MODEL LEADERBOARD ============ -->
+      <section class="view" id="view-leaderboard">
+        <div class="page-head">
+          <div>
+            <h1 class="page-title">被测模型 Leaderboard</h1>
+            <p class="page-desc">按机评均分排序的被测模型排行，仅统计已成功解析出机评分数（score_status=OK）的用例。</p>
+          </div>
+          <div class="seg" id="lb-period-switch">
+            <button class="active" data-period="30d">近30天</button>
+            <button data-period="90d">近90天</button>
+            <button data-period="all">全部</button>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head">
+            <h3>模型排行榜</h3>
+            <span class="sub muted mono" id="lb-summary"></span>
+          </div>
+          <div class="panel-body">
+            <table class="lb-table">
+              <thead><tr>
+                <th style="width:36px;">#</th><th>被测模型</th><th style="width:110px;">机评均分</th>
+                <th style="width:90px;">评测次数</th><th style="width:90px;">用例数</th>
+                <th>Top 标签</th><th style="width:120px;">近期趋势</th>
+              </tr></thead>
+              <tbody id="lb-table-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ CASE SETS LIST ============ -->
+
+      <section class="view" id="view-casesets">
+        <div class="page-head">
+          <div>
+            <h1 class="page-title">用例集</h1>
+            <p class="page-desc">每条用例包含任务描述、关联输入文件与纯文本校验点；校验点仅评测阶段可见，对被测系统完全隔离。</p>
+          </div>
+          <div class="flex gap-8" style="align-items:center;">
+            <label class="flex gap-8" style="align-items:center;font-size:12.5px;color:var(--quiet);cursor:pointer;">
+              <input type="checkbox" id="cs-select-all">全选
+            </label>
+            <span class="muted mono" id="cs-selected-count" style="font-size:11.5px;display:none;">已选 0 项</span>
+            <button class="btn btn-ghost btn-sm" id="cs-batch-delete-btn" disabled style="color:var(--err);border-color:var(--err-soft);">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>
+              批量删除
+            </button>
+            <button class="btn btn-ghost btn-sm" id="btn-import-caseset">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16"/></svg>
+              导入 ZIP
+            </button>
+            <button class="btn btn-ghost btn-sm" id="btn-download-caseset-template">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h5"/></svg>
+              下载样例
+            </button>
+            <button class="btn btn-primary" id="btn-new-caseset">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+              新建用例集
+            </button>
+          </div>
+        </div>
+        <div id="caseset-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;"></div>
+      </section>
+
+
+      <!-- ============ CASE SET DETAIL ============ -->
+      <section class="view" id="view-caseset-detail">
+        <div class="page-head">
+          <div>
+            <div class="flex gap-8" style="align-items:center;margin-bottom:6px;">
+              <button class="icon-btn btn-sm" style="width:30px;height:30px" data-view-link="casesets">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
+              </button>
+              <h1 class="page-title" id="csd-title" style="margin:0;">加载中…</h1>
+              <span class="badge ash" id="csd-version"></span>
+            </div>
+            <p class="page-desc" id="csd-desc"></p>
+          </div>
+          <div class="flex gap-8">
+            <button class="btn btn-ghost" id="csd-export-btn">导出 ZIP</button>
+            <button class="btn btn-ghost" id="csd-edit-btn">编辑</button>
+            <button class="btn btn-danger" id="csd-delete-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14"/></svg>
+              删除
+            </button>
+            <button class="btn btn-primary" id="csd-run-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 4l14 8-14 8V4z"/></svg>
+              发起评测执行
+            </button>
+          </div>
+        </div>
+
+        <div class="caseset-detail-grid">
+          <div class="panel caseset-cases-panel">
+            <div class="panel-head">
+              <h3>用例列表</h3>
+              <span class="muted mono" id="csd-case-count" style="font-size:11.5px;"></span>
+            </div>
+            <div class="panel-body" id="csd-case-list"></div>
+          </div>
+
+          <div class="caseset-detail-side">
+            <div class="panel" id="csd-tag-stats-panel">
+              <div class="panel-head">
+                <h3>按标签统计</h3>
+                <span class="muted mono" style="font-size:11.5px;" id="csd-tag-stats-sub"></span>
+              </div>
+              <div class="panel-body pad" id="csd-tag-stats"></div>
+            </div>
+            <div class="panel" id="csd-linked-runs-panel">
+              <div class="panel-head">
+                <h3>最近评测执行</h3>
+                <span class="muted mono" style="font-size:11.5px;" id="csd-linked-runs-count"></span>
+              </div>
+              <div class="row-list" id="csd-linked-runs-list"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ TARGET ENDPOINTS ============ -->
+      <section class="view" id="view-target-endpoints">
+        <div class="page-head">
+          <div>
+            <h1 class="page-title">被测模型端点</h1>
+            <p class="page-desc">配置被测 agent 使用的模型接入参数。仅 name / base_url / model_name / api_key 可写，评测镜像与 Prompt 均内置不可改。api_key 加密存储，接口一律脱敏返回。</p>
+          </div>
+          <button class="btn btn-primary" id="btn-new-target-endpoint">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+            新增端点
+          </button>
+        </div>
+        <div class="panel">
+          <div class="row-list-head" style="grid-template-columns:1.4fr 1.4fr 1fr 100px 90px;">
+            <div>名称</div><div>Base URL / 模型</div><div>API Key</div><div>默认</div><div></div>
+          </div>
+          <div class="row-list" id="target-endpoint-list"></div>
+        </div>
+      </section>
+
+      <!-- ============ EVAL ENDPOINTS ============ -->
+      <section class="view" id="view-eval-endpoints">
+        <div class="page-head">
+          <div>
+            <h1 class="page-title">评测模型端点</h1>
+            <p class="page-desc">配置驱动评测 LLM 的模型接入参数，配置方式与被测端点一致，独立管理、互不影响。</p>
+          </div>
+          <button class="btn btn-primary" id="btn-new-eval-endpoint">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+            新增端点
+          </button>
+        </div>
+        <div class="panel">
+          <div class="row-list-head" style="grid-template-columns:1.4fr 1.4fr 1fr 100px 90px;">
+            <div>名称</div><div>Base URL / 模型</div><div>API Key</div><div>默认</div><div></div>
+          </div>
+          <div class="row-list" id="eval-endpoint-list"></div>
+        </div>
+      </section>
+
+      <!-- ============ PROMPTS ============ -->
+      <section class="view" id="view-prompts">
+        <div class="page-head">
+          <div>
+            <h1 class="page-title">评测 Prompt</h1>
+            <p class="page-desc">自定义评测阶段用于指导评测 LLM 撰写分析报告的 Prompt 模板。创建评测执行时会将所选 Prompt 内容快照，保证历史结果可复现。</p>
+          </div>
+          <button class="btn btn-primary" id="btn-new-prompt">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+            新建 Prompt
+          </button>
+        </div>
+        <div id="prompt-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;"></div>
+      </section>
+
+      <!-- ============ MCP SERVERS ============ -->
+      <section class="view" id="view-mcp-servers">
+        <div class="page-head">
+          <div>
+            <h1 class="page-title">MCP 服务器</h1>
+            <p class="page-desc">配置可复用的 MCP Server（写入 .mcp.json 的 mcpServers.&lt;名称&gt; 字段），在用例编排时勾选绑定；派发测试任务前会在执行器 Pod 内还原为 $WORKSPACE/.mcp.json。</p>
+          </div>
+          <button class="btn btn-primary" id="btn-new-mcp-config">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+            新增 MCP 服务器
+          </button>
+        </div>
+        <div class="panel">
+          <div class="row-list-head" style="grid-template-columns:1.2fr 2fr 90px;">
+            <div>名称</div><div>配置（config_json）</div><div></div>
+          </div>
+          <div class="row-list" id="mcp-config-list"></div>
+        </div>
+      </section>
+
+      <!-- ============ SKILLS ============ -->
+      <section class="view" id="view-skills">
+        <div class="page-head">
+          <div>
+            <h1 class="page-title">Skill</h1>
+            <p class="page-desc">配置可复用的 Claude Code Skill（SKILL.md + 可选附加文件），在用例编排时勾选绑定；派发测试任务前会在执行器 Pod 内还原为 $HOME/.claude/skills/&lt;名称&gt;/。</p>
+          </div>
+          <button class="btn btn-primary" id="btn-new-skill-config">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+            新增 Skill
+          </button>
+        </div>
+        <div id="skill-config-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;"></div>
+      </section>
+
+      <!-- ============ ENV VARS ============ -->
+      <section class="view" id="view-env-vars">
+        <div class="page-head">
+          <div>
+            <h1 class="page-title">环境变量</h1>
+            <p class="page-desc">预定义敏感配置（如鉴权 Token）。用例描述中用 <code class="mono">{{KEY}}</code> 引用；派发测试任务时替换为真实 Value。Value 加密存储，列表仅展示脱敏结果。</p>
+          </div>
+          <button class="btn btn-primary" id="btn-new-env-var">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+            新增环境变量
+          </button>
+        </div>
+        <div class="panel">
+          <div class="row-list-head" style="grid-template-columns:1.2fr 1.2fr 1.4fr 90px;">
+            <div>Key</div><div>Value</div><div>说明</div><div></div>
+          </div>
+          <div class="row-list" id="env-var-list"></div>
+        </div>
+      </section>
+
+    </div>
+  </div>
+</div>
+
+<!-- ============ Drawer: 通用文件预览 / trace 可视化 ============ -->
+<div class="overlay" id="drawer-overlay"></div>
+<div class="drawer" id="preview-drawer">
+  <div class="drawer-resizer" id="drawer-resizer" title="拖拽调整宽度"></div>
+  <div class="drawer-head">
+    <div class="drawer-title-wrap">
+      <div class="file-icon" id="drawer-file-icon">?</div>
+      <div>
+        <div class="drawer-title" id="drawer-title">文件名</div>
+        <div class="drawer-sub" id="drawer-sub">--</div>
+      </div>
+    </div>
+    <div class="drawer-actions">
+      <button class="icon-btn" id="drawer-back-btn" title="返回" style="display:none;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M15 18l-6-6 6-6"/></svg>
+      </button>
+      <button class="icon-btn" id="drawer-download-btn" title="下载">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16"/></svg>
+      </button>
+      <button class="icon-btn" id="drawer-close-btn" title="关闭">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+  </div>
+  <div class="drawer-body" id="drawer-body"></div>
+</div>
+
+<!-- ============ Modal: 新建评测执行 ============ -->
+<div class="modal" id="modal-new-evalrun">
+  <div class="modal-backdrop" data-close-modal="modal-new-evalrun"></div>
+  <div class="modal-box" style="width:460px;">
+    <h4>新建评测执行</h4>
+    <p>选择用例集与端点，创建后将排队进入二段式调度。</p>
+    <div class="field">
+      <label>用例集</label>
+      <select id="nr-caseset"></select>
+    </div>
+    <div class="field">
+      <label>被测模型端点</label>
+      <select id="nr-endpoint"></select>
+    </div>
+    <div class="field">
+      <label>评测模型端点</label>
+      <select id="nr-eval-endpoint"></select>
+    </div>
+    <div class="field">
+      <label>评测 Prompt</label>
+      <select id="nr-prompt"></select>
+    </div>
+    <div class="field">
+      <label>任务并发数</label>
+      <input type="number" id="nr-max-concurrent" min="1" step="1" placeholder="留空使用服务端默认值" />
+      <span class="row-sub" style="font-size:12px;">本次执行同时处于运行中的用例数上限，留空或填 0 表示使用服务端配置的默认值</span>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" data-close-modal="modal-new-evalrun">取消</button>
+      <button class="btn btn-primary" id="nr-submit">创建并排队</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ Modal: 用例集编辑（新建/编辑） ============ -->
+<div class="modal" id="modal-caseset">
+  <div class="modal-backdrop" data-close-modal="modal-caseset"></div>
+  <div class="modal-box caseset-modal-box">
+    <div class="caseset-editor-shell">
+      <aside class="caseset-editor-side">
+        <div class="editor-kicker">CASESET STUDIO</div>
+        <h4 id="cs-modal-title">新建用例集</h4>
+        <p>把评测目标、输入文件、校验点集中编排成可复用的评测资产。</p>
+        <div class="editor-side-stat"><span id="cs-editor-case-count">1</span><small>用例数量</small></div>
+        <button class="btn btn-primary" id="cs-add-case-btn" type="button">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+          添加用例
+        </button>
+        <div class="editor-hint">建议将每个用例拆成明确目标、输入约束、输出格式和可核验标准。</div>
+      </aside>
+      <main class="caseset-editor-main">
+        <div class="caseset-editor-topbar">
+          <div class="field"><label>用例集名称</label><input type="text" id="cs-name" placeholder="例如：电商运营报表生成"></div>
+          <div class="field"><label>描述</label><textarea id="cs-desc" placeholder="这个用例集验证什么能力？"></textarea></div>
+        </div>
+        <div class="case-list-head"><div><span>用例编排</span><small>点击标签页切换聚焦编辑的用例</small></div></div>
+        <div id="cs-case-outline" class="case-outline"></div>
+        <div id="cs-case-editor-list" class="case-editor-list"></div>
+      </main>
+    </div>
+    <div class="modal-actions caseset-editor-actions">
+      <button class="btn btn-ghost" data-close-modal="modal-caseset">取消</button>
+      <button class="btn btn-primary" id="cs-submit">保存用例集</button>
+    </div>
+  </div>
+</div>
+
+<!-- 用例编辑卡片模板（JS 克隆使用，不直接渲染） -->
+<template id="cs-case-card-template">
+  <div class="panel cs-case-card">
+    <div class="case-card-head">
+      <div>
+        <span class="case-idx mono cs-case-no">#01</span>
+        <strong>评测用例</strong>
+      </div>
+      <button class="icon-btn cs-case-remove" title="移除此用例">
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div class="case-card-grid">
+      <section class="case-card-primary">
+        <div class="field"><label>用例名称</label><input type="text" class="cs-case-name" placeholder="例如：生成华东区周报"></div>
+        <div class="field-row-4">
+          <div class="field"><label>一级类型</label>
+            <select class="cs-case-level1">
+              <option value="">请选择</option>
+            </select>
+          </div>
+          <div class="field"><label>二级类型</label>
+            <select class="cs-case-level2" disabled>
+              <option value="">请先选一级类型</option>
+            </select>
+          </div>
+          <div class="field"><label>难度</label><input type="text" class="cs-case-difficulty" placeholder="例如：中"></div>
+        </div>
+        <div class="field">
+          <label>task类型（可多选）</label>
+          <div class="cs-case-task-types checkbox-chip-zone"></div>
+        </div>
+        <div class="field rich-field">
+          <label>任务描述（支持 Markdown）</label>
+          <div class="rich-editor" data-rich-editor="description">
+            <div class="rich-toolbar" aria-label="任务描述编辑工具栏">
+              <button type="button" data-md-cmd="bold" title="加粗 **文本**">B</button>
+              <button type="button" data-md-cmd="italic" title="斜体 *文本*"><i>I</i></button>
+              <button type="button" data-md-cmd="code" title="行内代码 `代码`">&lt;/&gt;</button>
+              <button type="button" data-md-cmd="heading" title="标题（点击升/降级）">标题</button>
+              <button type="button" data-md-cmd="ul" title="项目符号列表">• List</button>
+              <button type="button" data-md-cmd="ol" title="编号列表">1. List</button>
+              <button type="button" data-md-cmd="quote" title="引用">″ Quote</button>
+              <button type="button" data-md-cmd="codeblock" title="代码块">{ }</button>
+              <button type="button" data-md-cmd="link" title="链接">Link</button>
+              <button type="button" data-md-template="goal" title="插入目标模板">目标</button>
+              <button type="button" data-md-template="steps" title="插入步骤模板">步骤</button>
+              <button type="button" class="cs-insert-env" title="插入全局环境变量 {{KEY}}">{{env}}</button>
+              <button type="button" class="cs-md-toggle-preview" title="仅源码" style="margin-left:auto;">预览</button>
+            </div>
+            <div class="cs-md-editor">
+              <textarea class="cs-case-description cs-md-source" placeholder="支持 Markdown：# 标题　**粗体**　- 列表　`代码`　&gt; 引用　```代码块```" spellcheck="false"></textarea>
+              <div class="cs-case-description-preview cs-md-preview"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+      <aside class="case-card-aside">
+        <div class="field file-field">
+          <label>关联输入文件</label>
+          <div class="cs-case-files file-chip-zone"></div>
+          <label class="file-drop-lite">
+            <input type="file" class="cs-case-file-input" multiple>
+            <span>点击选择文件</span><small>支持多文件追加</small>
+          </label>
+        </div>
+        <div class="field checkpoint-field">
+          <label>校验点</label>
+          <div class="checkpoint-editor">
+            <div class="checkpoint-list cs-checkpoint-list"></div>
+            <div class="checkpoint-input-row">
+              <input type="text" class="cs-checkpoint-input" placeholder="输入一条校验点，回车添加">
+              <button type="button" class="btn btn-ghost btn-sm cs-add-checkpoint">添加</button>
+            </div>
+          </div>
+        </div>
+        <div class="field">
+          <label>绑定 MCP 服务器（可选）</label>
+          <div class="cs-case-mcp-list checkbox-chip-zone"><span class="muted" style="font-size:12px;">加载中…</span></div>
+        </div>
+        <div class="field">
+          <label>绑定 Skill（可选）</label>
+          <div class="cs-case-skill-list checkbox-chip-zone"><span class="muted" style="font-size:12px;">加载中…</span></div>
+        </div>
+        <div class="field">
+          <label>HTML 视觉美观度评测</label>
+          <div class="switch-row">
+            <div class="switch on cs-case-html-visual-switch" title="开启：产物中的 HTML 文件转图片，评测 LLM 逐页评审排版与美观度；关闭：跳过转图/视觉评审，仅按任务描述与校验点评估其它维度"></div>
+            <span class="row-sub" style="font-size:12px;">默认开启，关闭后该用例的 HTML 产物不再转图片评测美观度</span>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>
+</template>
+
+
+<!-- ============ Modal: 通用确认 ============ -->
+<div class="modal" id="modal-confirm">
+  <div class="modal-backdrop" data-close-modal="modal-confirm"></div>
+  <div class="modal-box">
+    <h4 id="confirm-title">确认操作</h4>
+    <p id="confirm-desc">此操作不可撤销，确定继续吗？</p>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" data-close-modal="modal-confirm">取消</button>
+      <button class="btn btn-danger" id="confirm-ok-btn">确认</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ Modal: 端点编辑 ============ -->
+<div class="modal" id="modal-endpoint">
+  <div class="modal-backdrop" data-close-modal="modal-endpoint"></div>
+  <div class="modal-box" style="width:440px;">
+    <h4 id="ep-modal-title">新增端点</h4>
+    <p id="ep-modal-desc">配置模型接入参数，api_key 将加密存储。</p>
+    <div class="field"><label>名称</label><input type="text" id="ep-name" placeholder="例如：生产-GPT线"></div>
+    <div class="field"><label>Base URL</label><input type="text" id="ep-baseurl" placeholder="https://api.example.com/v1"></div>
+    <div class="field"><label>模型名称</label><input type="text" id="ep-model" placeholder="gpt-4.1-agent"></div>
+    <div class="field"><label>API Key</label><input type="text" id="ep-apikey" placeholder="留空则保留原值（编辑时）"></div>
+    <div class="field">
+      <div class="switch-row">
+        <div class="switch" id="ep-default-switch"></div>
+        <span style="font-size:13px;">设为默认端点</span>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" data-close-modal="modal-endpoint">取消</button>
+      <button class="btn btn-primary" id="ep-submit">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ Modal: Prompt 编辑 ============ -->
+<div class="modal" id="modal-prompt">
+  <div class="modal-backdrop" data-close-modal="modal-prompt"></div>
+  <div class="modal-box" style="width:560px;">
+    <h4 id="pm-modal-title">新建 Prompt</h4>
+    <p>用于指导评测 LLM 撰写 Markdown 分析报告的模板内容。</p>
+    <div class="field"><label>名称</label><input type="text" id="pm-name" placeholder="例如：严格合规版（金融场景）"></div>
+    <div class="field"><label>内容</label><textarea id="pm-content" style="min-height:180px;" placeholder="Prompt 模板内容…"></textarea></div>
+    <div class="field">
+      <div class="switch-row">
+        <div class="switch" id="pm-default-switch"></div>
+        <span style="font-size:13px;">设为默认 Prompt</span>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" data-close-modal="modal-prompt">取消</button>
+      <button class="btn btn-primary" id="pm-submit">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ Modal: MCP 服务器编辑 ============ -->
+<div class="modal" id="modal-mcp-config">
+  <div class="modal-backdrop" data-close-modal="modal-mcp-config"></div>
+  <div class="modal-box" style="width:560px;">
+    <h4 id="mcp-modal-title">新增 MCP 服务器</h4>
+    <p>config_json 为单个 MCP server 的配置对象，会写入 .mcp.json 的 mcpServers.&lt;名称&gt; 字段，例如：<span class="mono">{"command":"npx","args":["-y","@some/mcp-server"],"env":{"API_KEY":"..."}}</span></p>
+    <div class="field"><label>名称</label><input type="text" id="mcp-name" placeholder="例如：filesystem"></div>
+    <div class="field"><label>描述</label><input type="text" id="mcp-desc" placeholder="这个 MCP server 提供什么能力？"></div>
+    <div class="field"><label>config_json</label><textarea id="mcp-config-json" class="mono" style="min-height:160px;" placeholder='{"command":"npx","args":["-y","@some/mcp-server"]}'></textarea></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" data-close-modal="modal-mcp-config">取消</button>
+      <button class="btn btn-primary" id="mcp-submit">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ Modal: Skill 编辑 ============ -->
+<div class="modal" id="modal-skill-config">
+  <div class="modal-backdrop" data-close-modal="modal-skill-config"></div>
+  <div class="modal-box" style="width:640px;">
+    <h4 id="skill-modal-title">新增 Skill</h4>
+    <p>content_md 落地为该 Skill 目录下的 SKILL.md 正文；附加文件（可选）以「相对路径 = 内容」逐行填写，落地到 SKILL.md 同级目录，例如 references/style.md。</p>
+    <div class="field"><label>名称</label><input type="text" id="skill-name" placeholder="例如：report-writer"></div>
+    <div class="field"><label>描述</label><input type="text" id="skill-desc" placeholder="这个 Skill 用于什么场景？"></div>
+    <div class="field"><label>SKILL.md 内容（content_md）</label><textarea id="skill-content-md" style="min-height:160px;" placeholder="# Skill 名称&#10;&#10;使用说明…"></textarea></div>
+    <div class="field">
+      <label>附加文件（可选，每行一条：相对路径=内容，用 \n 表示文件内换行）</label>
+      <textarea id="skill-extra-files" class="mono" style="min-height:100px;" placeholder="references/style.md=使用正式的书面语气"></textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" data-close-modal="modal-skill-config">取消</button>
+      <button class="btn btn-primary" id="skill-submit">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ Modal: 环境变量 ============ -->
+<div class="modal" id="modal-env-var">
+  <div class="modal-backdrop" data-close-modal="modal-env-var"></div>
+  <div class="modal-box" style="width:440px;">
+    <h4 id="env-modal-title">新增环境变量</h4>
+    <p>Key 在用例描述中以 <code class="mono">{{KEY}}</code> 引用。Value 加密存储；编辑时留空表示保留原值。</p>
+    <div class="field"><label>Key</label><input type="text" id="env-key" class="mono" placeholder="例如：MAIL_API_TOKEN"></div>
+    <div class="field"><label>Value</label><input type="password" id="env-value" placeholder="编辑时留空则保留原值" autocomplete="new-password"></div>
+    <div class="field"><label>说明</label><input type="text" id="env-desc" placeholder="这个变量用在什么场景？"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" data-close-modal="modal-env-var">取消</button>
+      <button class="btn btn-primary" id="env-submit">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ Modal: 插入环境变量 ============ -->
+<div class="modal" id="modal-insert-env">
+  <div class="modal-backdrop" data-close-modal="modal-insert-env"></div>
+  <div class="modal-box" style="width:420px;">
+    <h4>插入环境变量</h4>
+    <p>选择要插入到任务描述光标处的 <code class="mono">{{KEY}}</code>。</p>
+    <div id="insert-env-list" class="checkbox-chip-zone" style="min-height:48px;"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" data-close-modal="modal-insert-env">关闭</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast-wrap" id="toast-wrap"></div>
+
+<script type="module" src="/src/main.ts"></script>
+</body>
+</html>
