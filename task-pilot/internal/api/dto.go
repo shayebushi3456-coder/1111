@@ -80,13 +80,11 @@ type CaseRequest struct {
 	// 派发该用例的测试任务前会在执行器 Pod 内还原为对应的 MCP/Skill 配置。
 	MCPIDs   []string `json:"mcp_ids"`
 	SkillIDs []string `json:"skill_ids"`
-	// 数据标签：一级/二级类型为级联下拉；task_types 可多选；difficulty 手填。
-	Level1Type string   `json:"level1_type"`
-	Level2Type string   `json:"level2_type"`
-	TaskTypes  []string `json:"task_types"`
-	Difficulty string   `json:"difficulty"`
-	// SkipHTMLVisualScore 跳过该用例测试产物中 HTML 文件的视觉美观度评测。
-	// 省略/false（默认）：HTML 产物按既有行为转图片走美观度评测；true：不转图片，跳过该维度评审。
+	// EnablePPTVisualScore / EnableHTMLVisualScore 是否对 PPT/HTML 类产物执行转图片视觉评测。
+	// 省略/false（默认）：不转图片、不做视觉评审；true：显式开启对应类型的视觉评测。
+	EnablePPTVisualScore  bool `json:"enable_ppt_visual_score"`
+	EnableHTMLVisualScore bool `json:"enable_html_visual_score"`
+	// SkipHTMLVisualScore 兼容旧字段，新逻辑以 EnableHTMLVisualScore 为准。
 	SkipHTMLVisualScore bool `json:"skip_html_visual_score"`
 }
 
@@ -211,24 +209,5 @@ type SkillConfigResponse struct {
 
 type SkillConfigListResponse struct {
 	SkillConfigs []SkillConfigResponse `json:"skill_configs"`
-}
-
-// ---- 全局环境变量 ----
-
-type UpsertEnvVarRequest struct {
-	Key         string `json:"key" binding:"required"`
-	Value       string `json:"value"` // 更新时留空保留原值
-	Description string `json:"description"`
-}
-
-type EnvVarResponse struct {
-	ID          string `json:"id"`
-	Key         string `json:"key"`
-	ValueMasked string `json:"value_masked"`
-	Description string `json:"description"`
-}
-
-type EnvVarListResponse struct {
-	EnvVars []EnvVarResponse `json:"env_vars"`
 }
 

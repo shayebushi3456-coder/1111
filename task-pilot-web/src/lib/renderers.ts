@@ -1,29 +1,28 @@
+import MarkdownIt from 'markdown-it';
 import { escapeHtml } from './ui';
 
-function inlineMd(s: string): string {
-  return escapeHtml(s).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/`(.+?)`/g, '<code>$1</code>')
-    .replace(/✅/g, '<span style="color:var(--ok)">✓</span>').replace(/❌/g, '<span style="color:var(--err)">✗</span>').replace(/⚠️/g, '<span style="color:var(--queue)">!</span>');
-}
+const markdown = new MarkdownIt({
+  html: false,
+  linkify: true,
+  typographer: true,
+  breaks: false,
+});
+
+markdown.renderer.rules.link_open = (tokens, idx, options, env, self) => {
+  const token = tokens[idx];
+  const targetIndex = token.attrIndex('target');
+  if (targetIndex < 0) token.attrPush(['target', '_blank']);
+  else token.attrs![targetIndex][1] = '_blank';
+
+  const relIndex = token.attrIndex('rel');
+  if (relIndex < 0) token.attrPush(['rel', 'noopener noreferrer']);
+  else token.attrs![relIndex][1] = 'noopener noreferrer';
+
+  return self.renderToken(tokens, idx, options);
+};
 
 export function renderMarkdown(md: string): string {
-  const lines = md.split('\n');
-  let html = '', inList = false;
-  for (const raw of lines) {
-    const line = raw.trim();
-    if (!line) { if (inList) { html += '</ul>'; inList = false; } continue; }
-    if (line.startsWith('# ')) { html += `<h1>${inlineMd(line.slice(2))}</h1>`; continue; }
-    if (line.startsWith('## ')) { html += `<h2>${inlineMd(line.slice(3))}</h2>`; continue; }
-    if (line.startsWith('- ') || line.startsWith('* ')) {
-      if (!inList) { html += '<ul>'; inList = true; }
-      html += `<li>${inlineMd(line.slice(2))}</li>`;
-      continue;
-    }
-    if (line.startsWith('> ')) { html += `<p style="border-left:2px solid var(--line-strong);padding-left:10px;color:var(--quiet);">${inlineMd(line.slice(2))}</p>`; continue; }
-    if (inList) { html += '</ul>'; inList = false; }
-    html += `<p>${inlineMd(line)}</p>`;
-  }
-  if (inList) html += '</ul>';
-  return html;
+  return markdown.render(md || '');
 }
 
 export function renderJSON(obj: unknown, indent = 0): string {

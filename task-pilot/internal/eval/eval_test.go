@@ -60,7 +60,7 @@ func TestNormalizeReport(t *testing.T) {
 }
 
 func TestBuildEvalCommand(t *testing.T) {
-	cmd := BuildEvalCommand("请撰写分析报告", "", false)
+	cmd := BuildEvalCommand("请撰写分析报告", "", true, true)
 	for _, want := range []string{
 		"lumi-model-setup switch claude",
 		`--api-key "$EVAL_API_KEY"`,
@@ -104,31 +104,25 @@ func TestBuildEvalCommand(t *testing.T) {
 	}
 
 	// 自定义 modelCommand 应被拼接进最终脚本，替代默认的 "claude -p"。
-	custom := BuildEvalCommand("请撰写分析报告", "ccr code -p", false)
-	if !strings.Contains(custom, "ccr code -p < \"$WORKSPACE/tmp/prompt.txt\"") {
+	custom := BuildEvalCommand("请撰写分析报告", "ccr code -p", true, true)
+	if !strings.Contains(custom, "ccr code -p --output-format stream-json --verbose") {
 		t.Errorf("custom model command not applied: %s", custom)
 	}
 }
 
-// TestBuildEvalCommandSkipHTMLVisualScore skipHTMLVisualScore=true 时不应下发/调用
-// html_score_runner.py，也不应创建 HTML 渲染产物目录，但仍需保留 PPT 渲染逻辑不受影响，
-// 且给出固定的跳过说明供评测 agent 识别，避免其误判为渲染失败。
-func TestBuildEvalCommandSkipHTMLVisualScore(t *testing.T) {
-	cmd := BuildEvalCommand("请撰写分析报告", "", true)
-	if strings.Contains(cmd, "html_score_runner.py") {
-		t.Error("skip_html_visual_score=true must not invoke/ship html_score_runner.py")
+// TestBuildEvalCommandVisualScoreDisabledByDefault visual score disabled 时不应下发/调用
+// PPT/HTML 渲染脚本，也不应创建渲染产物目录；需给出固定跳过说明供评测 agent 识别，
+// 避免其误判为渲染失败。
+func TestBuildEvalCommandVisualScoreDisabledByDefault(t *testing.T) {
+	cmd := BuildEvalCommand("请撰写分析报告", "", false, false)
+	if strings.Contains(cmd, "html_score_runner.py") || strings.Contains(cmd, "ppt_score_runner.py") {
+		t.Error("visual score disabled must not invoke/ship PPT/HTML scorer scripts")
 	}
-	if strings.Contains(cmd, "html_render_pages") || strings.Contains(cmd, "html_review") {
-		t.Error("skip_html_visual_score=true must not create HTML render output dirs")
+	if strings.Contains(cmd, "html_render_pages") || strings.Contains(cmd, "html_review") || strings.Contains(cmd, "ppt_render_pages") || strings.Contains(cmd, "ppt_review") {
+		t.Error("visual score disabled must not create PPT/HTML render output dirs")
 	}
-	if !strings.Contains(cmd, "skip_html_visual_score=true") {
-		t.Error("expected explicit skip explanation for HTML_RENDER_SUMMARY")
-	}
-	// PPT 渲染逻辑与词表不应受该开关影响。
-	for _, want := range []string{"ppt_score_runner.py", "PPT_RENDER_SUMMARY", "ppt_render_pages"} {
-		if !strings.Contains(cmd, want) {
-			t.Errorf("PPT rendering must be unaffected by skip_html_visual_score, missing %q", want)
-		}
+	if !strings.Contains(cmd, "enable_html_visual_score=false") || !strings.Contains(cmd, "enable_ppt_visual_score=false") {
+		t.Error("expected explicit skip explanation for disabled visual scoring")
 	}
 	if err := AssertNonEmpty(cmd); err != nil {
 		t.Error(err)

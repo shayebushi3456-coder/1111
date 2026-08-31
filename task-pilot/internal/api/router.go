@@ -2,7 +2,7 @@ package api
 
 import "github.com/gin-gonic/gin"
 
-func NewRouter(handler *Handler, config *ConfigHandler, evalEndpoint *EvalEndpointHandler, caseset *CaseSetHandler, eval *EvalHandler, prompt *PromptHandler, leaderboard *LeaderboardHandler, mcpConfig *MCPConfigHandler, skillConfig *SkillConfigHandler, envVar *EnvVarHandler) *gin.Engine {
+func NewRouter(handler *Handler, config *ConfigHandler, evalEndpoint *EvalEndpointHandler, caseset *CaseSetHandler, eval *EvalHandler, prompt *PromptHandler, leaderboard *LeaderboardHandler, mcpConfig *MCPConfigHandler, skillConfig *SkillConfigHandler) *gin.Engine {
 	r := gin.Default()
 	r.GET("/healthz", handler.Healthz)
 
@@ -73,13 +73,6 @@ func NewRouter(handler *Handler, config *ConfigHandler, evalEndpoint *EvalEndpoi
 		v1.GET("/config/skills/:id", skillConfig.Get)
 		v1.PUT("/config/skills/:id", skillConfig.Update)
 		v1.DELETE("/config/skills/:id", skillConfig.Delete)
-
-		// 全局环境变量（加密存储；用例描述用 {{KEY}} 引用，派发测试任务时替换）
-		v1.GET("/config/env-vars", envVar.List)
-		v1.POST("/config/env-vars", envVar.Create)
-		v1.GET("/config/env-vars/:id", envVar.Get)
-		v1.PUT("/config/env-vars/:id", envVar.Update)
-		v1.DELETE("/config/env-vars/:id", envVar.Delete)
 	}
 	return r
 }

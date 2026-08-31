@@ -30,11 +30,10 @@ type EvalService struct {
 	prompts      *PromptService
 	mcpConfigs   *MCPConfigService
 	skillConfigs *SkillConfigService
-	envVars      *EnvVarService
 }
 
-func NewEvalService(db *gorm.DB, cfg *config.Config, tasks *TaskService, caseSet *CaseSetService, configS *ConfigService, evalEndpoint *EvalEndpointService, files *filetransfer.Service, prompts *PromptService, mcpConfigs *MCPConfigService, skillConfigs *SkillConfigService, envVars *EnvVarService) *EvalService {
-	return &EvalService{db: db, cfg: cfg, tasks: tasks, caseSet: caseSet, configS: configS, evalEndpoint: evalEndpoint, files: files, prompts: prompts, mcpConfigs: mcpConfigs, skillConfigs: skillConfigs, envVars: envVars}
+func NewEvalService(db *gorm.DB, cfg *config.Config, tasks *TaskService, caseSet *CaseSetService, configS *ConfigService, evalEndpoint *EvalEndpointService, files *filetransfer.Service, prompts *PromptService, mcpConfigs *MCPConfigService, skillConfigs *SkillConfigService) *EvalService {
+	return &EvalService{db: db, cfg: cfg, tasks: tasks, caseSet: caseSet, configS: configS, evalEndpoint: evalEndpoint, files: files, prompts: prompts, mcpConfigs: mcpConfigs, skillConfigs: skillConfigs}
 }
 
 // CreateEvalRunInput 创建执行任务输入。
@@ -236,10 +235,13 @@ func buildTestCommand(description string, modelCommand string, setupScript strin
 	b.WriteString("cat output/trace.jsonl || true\n")
 	// 被测 agent 的工作目录是 $WORKSPACE，其生成的交付物（报告/CSV/代码等）多落在工作区
 	// 根目录，而非 output/。而 executor 只打包 output/ 目录，导致产物里只剩 trace.jsonl。
-	// 这里把根目录下新增的文件/目录（排除受管目录 input/output/tmp）归集进 output/，
-	// 确保被测系统的真实产出随 output.tar.gz 一并上传。-maxdepth 1 只取根层，cp -a 保留属性；
-	// 找不到内容时 find 正常退出，不影响 set -e。
-	b.WriteString("find \"$WORKSPACE\" -maxdepth 1 -mindepth 1 ! -name input ! -name output ! -name tmp -exec cp -a {} \"$WORKSPACE/output/\" \\; 2>/dev/null || true\n")
+	// 这里把根目录下新增的文件/目录（排除受管目录 input/output/tmp，以及非产出目录 home、
+	// .claude、.cache、.config、.local、node_modules）归集进 output/，确保被测系统的真实产出
+	// 随 output.tar.gz 一并上传。$HOME 在非 root 执行时被重定向到 "$WORKSPACE/home"（见上方
+	// env 注入），Claude Code 的 $HOME/.claude 状态目录体量可观且与被测系统的交付物无关，
+	// 必须排除，否则会被一并拷进 output/ 随产物打包上传，令 output.tar.gz 体积暴涨。
+	// -maxdepth 1 只取根层，cp -a 保留属性；找不到内容时 find 正常退出，不影响 set -e。
+	b.WriteString("find \"$WORKSPACE\" -maxdepth 1 -mindepth 1 ! -name input ! -name output ! -name tmp ! -name home ! -name .home ! -name .claude ! -name .cache ! -name .config ! -name .local ! -name node_modules -exec cp -a {} \"$WORKSPACE/output/\" \\; 2>/dev/null || true\n")
 	b.WriteString("if [ \"$task_pilot_agent_rc\" -ne 0 ]; then exit \"$task_pilot_agent_rc\"; fi\n")
 	return b.String()
 }
@@ -411,18 +413,16 @@ func buildSnapshot(cs *model.CaseSet) model.EvalRunSnapshot {
 			})
 		}
 		snap.Cases = append(snap.Cases, model.EvalRunSnapshotCase{
-			CaseID:              c.ID,
-			Name:                c.Name,
-			Description:         c.Description,
-			FileIDs:             c.FileIDs,
-			Checkpoints:         cps,
-			MCPIDs:              c.MCPIDs,
-			SkillIDs:            c.SkillIDs,
-			Level1Type:          c.Level1Type,
-			Level2Type:          c.Level2Type,
-			TaskTypes:           c.TaskTypes,
-			Difficulty:          c.Difficulty,
-			SkipHTMLVisualScore: c.SkipHTMLVisualScore,
+			CaseID:                c.ID,
+			Name:                  c.Name,
+			Description:           c.Description,
+			FileIDs:               c.FileIDs,
+			Checkpoints:           cps,
+			MCPIDs:                c.MCPIDs,
+			SkillIDs:              c.SkillIDs,
+			EnablePPTVisualScore:  c.EnablePPTVisualScore,
+			EnableHTMLVisualScore: c.EnableHTMLVisualScore,
+			SkipHTMLVisualScore:   c.SkipHTMLVisualScore,
 		})
 	}
 	return snap
@@ -680,22 +680,10 @@ func (s *EvalService) dispatchTestTask(ctx context.Context, ce *model.CaseExecut
 	}
 	setupScript := buildAgentSetupScript(mcps, skills)
 
-	// 用例描述可含 {{KEY}}；派发时用全局环境变量明文替换，库内/快照仍保留占位符。
-	envMap, err := s.envVars.ResolveMap()
-	if err != nil {
-		s.failEval(ce, "resolve env vars: "+err.Error())
-		return false
-	}
-	description, err := SubstituteEnvVars(sc.Description, envMap)
-	if err != nil {
-		s.failEval(ce, "substitute env vars: "+err.Error())
-		return false
-	}
-
 	task, err := s.tasks.CreateTask(ctx, CreateTaskInput{
 		Name:       fmt.Sprintf("%s-%s", run.Name, ce.CaseName),
 		Image:      resolveTestImage(run, s.cfg),
-		Command:    buildTestCommand(description, run.TestModelCommand, setupScript),
+		Command:    buildTestCommand(sc.Description, run.TestModelCommand, setupScript),
 		InputFiles: s.resolveInputFiles(sc.FileIDs),
 		Env: map[string]string{
 			"TARGET_BASE_URL":   endpoint.BaseURL,
@@ -818,28 +806,28 @@ func (s *EvalService) dispatchEvalTask(ctx context.Context, ce *model.CaseExecut
 		return false
 	}
 
-	// PPT 美观度评分器需要 gold_reference.json。当前用例模型只有自由文本校验点，
+	// PPT 视觉评测开启时，评分器需要 gold_reference.json。当前用例模型只有自由文本校验点，
 	// 第一版将 checkpoints 映射到 key_points_coverage，并使用评分器默认权重。
-	checkpointDescs := make([]string, 0, len(sc.Checkpoints))
-	for _, cp := range sc.Checkpoints {
-		checkpointDescs = append(checkpointDescs, cp.Description)
-	}
-	pptGoldJSON, err := eval.BuildPPTGoldReferenceJSON(sc.CaseID, sc.Name, checkpointDescs)
-	if err != nil {
-		s.failEval(ce, "build ppt gold reference: "+err.Error())
-		return false
-	}
-	pptGoldFile, err := s.files.SaveBytes([]byte(pptGoldJSON), "gold_reference.json", model.FilePurposeInput, ce.ID)
-	if err != nil {
-		s.failEval(ce, "save ppt gold reference: "+err.Error())
-		return false
+	inputFiles := []model.InputFileSpec{{FileID: inputFile.ID, Filename: "eval_input.json"}}
+	if sc.EnablePPTVisualScore {
+		checkpointDescs := make([]string, 0, len(sc.Checkpoints))
+		for _, cp := range sc.Checkpoints {
+			checkpointDescs = append(checkpointDescs, cp.Description)
+		}
+		pptGoldJSON, err := eval.BuildPPTGoldReferenceJSON(sc.CaseID, sc.Name, checkpointDescs)
+		if err != nil {
+			s.failEval(ce, "build ppt gold reference: "+err.Error())
+			return false
+		}
+		pptGoldFile, err := s.files.SaveBytes([]byte(pptGoldJSON), "gold_reference.json", model.FilePurposeInput, ce.ID)
+		if err != nil {
+			s.failEval(ce, "save ppt gold reference: "+err.Error())
+			return false
+		}
+		inputFiles = append(inputFiles, model.InputFileSpec{FileID: pptGoldFile.ID, Filename: "gold_reference.json"})
 	}
 
 	// 一并把测试产物作为评测输入（评测执行器读取过程与结果）。
-	inputFiles := []model.InputFileSpec{
-		{FileID: inputFile.ID, Filename: "eval_input.json"},
-		{FileID: pptGoldFile.ID, Filename: "gold_reference.json"},
-	}
 	artifacts, _ := s.files.ListArtifacts(ce.TestTaskID)
 	for i := range artifacts {
 		inputFiles = append(inputFiles, model.InputFileSpec{FileID: artifacts[i].ID, Filename: artifacts[i].Filename})
@@ -853,23 +841,22 @@ func (s *EvalService) dispatchEvalTask(ctx context.Context, ce *model.CaseExecut
 	// 测试任务不会看到——与校验点文本本身对被测 agent 保密的原则一致。
 	inputFiles = append(inputFiles, checkpointFileSpecs...)
 
-	// 下发 PPT/HTML 图片渲染与评分辅助脚本。EvalTask 会在检测到 PPTX/PPT 产物时
-	// best-effort 调用 ppt_score_runner.py，检测到 HTML 产物时调用
-	// html_score_runner.py；两者共用同一个 render_deck.py 纯语言渲染实现
-	// （pptx→python-pptx+Pillow，html→playwright），产物统一为逐页 PNG 供评测
-	// Claude 用 Read 工具评审。
-	for _, name := range eval.PPTScorerFilenames {
-		data, err := eval.ReadPPTScorerFile(name)
-		if err != nil {
-			s.failEval(ce, "load ppt scorer "+name+": "+err.Error())
-			return false
+	// 仅在用例显式开启 PPT 或 HTML 视觉评测时，下发图片渲染与评分辅助脚本。
+	// 默认不转图片评测，避免无关产物增加评测耗时和产物体积。
+	if sc.EnablePPTVisualScore || sc.EnableHTMLVisualScore {
+		for _, name := range eval.PPTScorerFilenames {
+			data, err := eval.ReadPPTScorerFile(name)
+			if err != nil {
+				s.failEval(ce, "load ppt scorer "+name+": "+err.Error())
+				return false
+			}
+			fo, err := s.files.SaveBytes(data, name, model.FilePurposeInput, ce.ID)
+			if err != nil {
+				s.failEval(ce, "save ppt scorer "+name+": "+err.Error())
+				return false
+			}
+			inputFiles = append(inputFiles, model.InputFileSpec{FileID: fo.ID, Filename: name})
 		}
-		fo, err := s.files.SaveBytes(data, name, model.FilePurposeInput, ce.ID)
-		if err != nil {
-			s.failEval(ce, "save ppt scorer "+name+": "+err.Error())
-			return false
-		}
-		inputFiles = append(inputFiles, model.InputFileSpec{FileID: fo.ID, Filename: name})
 	}
 
 	// 解析评测端点：优先本次 run 记录的 eval_endpoint_id；为空（历史数据）回退默认端点。
@@ -904,7 +891,7 @@ func (s *EvalService) dispatchEvalTask(ctx context.Context, ce *model.CaseExecut
 	task, err := s.tasks.CreateTask(ctx, CreateTaskInput{
 		Name:            "eval-" + ce.CaseName,
 		Image:           resolveEvalImage(run),
-		Command:         eval.BuildEvalCommand(promptContent, resolveEvalModelCommand(run), sc.SkipHTMLVisualScore),
+		Command:         eval.BuildEvalCommand(promptContent, resolveEvalModelCommand(run), sc.EnablePPTVisualScore, sc.EnableHTMLVisualScore),
 		InputFiles:      inputFiles,
 		Env:             evalEnv,
 		Role:            "eval",

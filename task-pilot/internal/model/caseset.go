@@ -20,7 +20,7 @@ type CaseSet struct {
 	Cases []Case `gorm:"foreignKey:CaseSetID;constraint:OnDelete:CASCADE" json:"cases,omitempty"`
 }
 
-// Case 单条用例：任务描述 + 关联文件 + 校验点 + 可选的 MCP/Skill 绑定 + 数据标签。
+// Case 单条用例：任务描述 + 关联文件 + 校验点 + 可选的 MCP/Skill 绑定。
 type Case struct {
 	ID           string `gorm:"primaryKey;size:64" json:"id"`
 	CaseSetID    string `gorm:"index;size:64" json:"case_set_id"`
@@ -30,15 +30,12 @@ type Case struct {
 	MCPIDsJSON   string `gorm:"type:text" json:"-"`
 	SkillIDsJSON string `gorm:"type:text" json:"-"`
 	OrderNo      int    `json:"order_no"`
-	// 数据标签：一级/二级类型为级联下拉；TaskTypes 可多选（JSON 存于 task_type 列）；Difficulty 手填。
-	Level1Type    string   `gorm:"size:128" json:"level1_type"`
-	Level2Type    string   `gorm:"size:128" json:"level2_type"`
-	TaskTypesJSON string   `gorm:"column:task_type;type:text" json:"-"`
-	Difficulty    string   `gorm:"size:64" json:"difficulty"`
-	TaskTypes     []string `gorm:"-" json:"task_types"`
-	// SkipHTMLVisualScore 跳过该用例测试产物中 HTML 文件的视觉美观度评测（不转图片、不做
-	// layout_soft/aesthetic 评审），仅评估任务描述/校验点覆盖等其它维度。零值 false 即为默认
-	// 行为：HTML 产物默认转图片走美观度评测，与新增此开关前的既有行为完全一致。
+	// EnablePPTVisualScore / EnableHTMLVisualScore 控制是否对 PPT/HTML 类产物执行转图片视觉评测。
+	// 默认 false：不转图片、不做视觉/排版/美观度评审；仅在用例显式开启对应开关时执行。
+	EnablePPTVisualScore  bool `json:"enable_ppt_visual_score"`
+	EnableHTMLVisualScore bool `json:"enable_html_visual_score"`
+	// SkipHTMLVisualScore 兼容旧字段。新逻辑以 EnableHTMLVisualScore 为准；该字段仅保留用于
+	// 旧数据/旧客户端往返，不再代表“默认开启后跳过”的主语义。
 	SkipHTMLVisualScore bool `json:"skip_html_visual_score"`
 
 	Checkpoints []Checkpoint `gorm:"foreignKey:CaseID;constraint:OnDelete:CASCADE" json:"checkpoints,omitempty"`
@@ -84,16 +81,4 @@ func DecodeFileIDs(raw string) []string {
 		return nil
 	}
 	return ids
-}
-
-// DecodeTaskTypes 反序列化 task 类型多选列表。兼容旧数据：纯文本单值视为仅含一项的数组。
-func DecodeTaskTypes(raw string) []string {
-	if raw == "" {
-		return nil
-	}
-	var ids []string
-	if err := json.Unmarshal([]byte(raw), &ids); err == nil {
-		return ids
-	}
-	return []string{raw}
 }

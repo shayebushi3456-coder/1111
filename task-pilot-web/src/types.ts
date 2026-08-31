@@ -74,13 +74,9 @@ export interface CaseItem {
   file_ids: string[];
   mcp_ids: string[];
   skill_ids: string[];
-  // 数据标签：一级/二级类型为级联词表下拉；task_types 可多选；difficulty 手填。
-  level1_type?: string;
-  level2_type?: string;
-  task_types?: string[];
-  difficulty?: string;
-  // skip_html_visual_score 跳过该用例测试产物中 HTML 文件的视觉美观度评测（不转图片、不做
-  // layout_soft/aesthetic 评审）。省略/false（默认）：HTML 产物按既有行为转图片走美观度评测。
+  enable_ppt_visual_score?: boolean;
+  enable_html_visual_score?: boolean;
+  // 兼容旧字段；新逻辑以 enable_html_visual_score 为准。
   skip_html_visual_score?: boolean;
 }
 
@@ -107,10 +103,8 @@ export interface CaseRequestInput {
   checkpoints: CheckpointRequestInput[];
   mcp_ids: string[];
   skill_ids: string[];
-  level1_type: string;
-  level2_type: string;
-  task_types: string[];
-  difficulty: string;
+  enable_ppt_visual_score: boolean;
+  enable_html_visual_score: boolean;
   skip_html_visual_score: boolean;
 }
 export interface CaseSetRequestInput {
@@ -147,20 +141,6 @@ export interface UpsertSkillConfigRequest {
   description: string;
   content_md: string;
   extra_files: Record<string, string>;
-}
-
-// ---- 全局环境变量（Value 加密存储，接口只返回脱敏 value_masked） ----
-export interface EnvVar {
-  id: string;
-  key: string;
-  value_masked: string;
-  description: string;
-}
-
-export interface UpsertEnvVarRequest {
-  key: string;
-  value: string; // 编辑时留空保留原值
-  description: string;
 }
 
 // ---- 执行任务（model.EvalRun / model.CaseExecution） ----

@@ -183,13 +183,11 @@ type EvalRunSnapshotCase struct {
 	// 保证历史 EvalRun 复现时使用的是创建时刻的绑定，不受后续用例编辑影响。
 	MCPIDs   []string `json:"mcp_ids"`
 	SkillIDs []string `json:"skill_ids"`
-	// 数据标签快照：创建时冻结，与 Case 上同名字段语义一致。
-	Level1Type string   `json:"level1_type"`
-	Level2Type string   `json:"level2_type"`
-	TaskTypes  []string `json:"task_types"`
-	Difficulty string   `json:"difficulty"`
-	// SkipHTMLVisualScore 创建时冻结的 HTML 视觉美观度评测开关，语义与 Case.SkipHTMLVisualScore
-	// 一致：与其它快照字段一样在创建时冻结，不受后续用例编辑影响。
+	// EnablePPTVisualScore / EnableHTMLVisualScore 创建时冻结的视觉评测开关。
+	// 默认 false：PPT/HTML 产物均不转图片评测，只有显式开启时执行。
+	EnablePPTVisualScore  bool `json:"enable_ppt_visual_score"`
+	EnableHTMLVisualScore bool `json:"enable_html_visual_score"`
+	// SkipHTMLVisualScore 兼容旧字段；新逻辑以 EnableHTMLVisualScore 为准。
 	SkipHTMLVisualScore bool `json:"skip_html_visual_score"`
 }
 

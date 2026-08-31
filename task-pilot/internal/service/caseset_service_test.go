@@ -91,27 +91,6 @@ func TestCaseSetSkipHTMLVisualScoreRoundTrip(t *testing.T) {
 	}
 }
 
-// TestCaseSetDataLabelsRoundTrip 用例数据标签需随 Create/Get 完整往返。
-func TestCaseSetDataLabelsRoundTrip(t *testing.T) {
-	svc := NewCaseSetService(newTestDB(t))
-	in := sampleInput()
-	in.Cases[0].Level1Type = "信息处理类"
-	in.Cases[0].Level2Type = "邮件管理"
-	in.Cases[0].TaskTypes = []string{"单步", "多步"}
-	in.Cases[0].Difficulty = "中"
-	cs, err := svc.Create(in)
-	if err != nil {
-		t.Fatalf("create: %v", err)
-	}
-	c := cs.Cases[0]
-	if c.Level1Type != "信息处理类" || c.Level2Type != "邮件管理" || c.Difficulty != "中" {
-		t.Errorf("labels not round-tripped: %+v", c)
-	}
-	if len(c.TaskTypes) != 2 || c.TaskTypes[0] != "单步" || c.TaskTypes[1] != "多步" {
-		t.Errorf("task_types not round-tripped: %v", c.TaskTypes)
-	}
-}
-
 // TestCaseSetCheckpointFileIDsRoundTrip 校验点绑定的参考文件 ID 需随 Create/Get 完整往返。
 func TestCaseSetCheckpointFileIDsRoundTrip(t *testing.T) {
 	svc := NewCaseSetService(newTestDB(t))

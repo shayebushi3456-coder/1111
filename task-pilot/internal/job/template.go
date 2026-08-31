@@ -296,8 +296,17 @@ set -e
 # Upload only this task's isolated output directory. Even failed tasks may have
 # useful diagnostics such as output/trace.jsonl, so upload before exiting.
 if [ -d "$WORKSPACE/output" ]; then
-  tar -czf "$WORKSPACE/tmp/output.tar.gz" -C "$WORKSPACE/output" .
-  curl -fsS -H "X-Task-Token: $TASK_TOKEN" -F "file=@$WORKSPACE/tmp/output.tar.gz" "%s/api/v1/tasks/$TASK_ID/artifacts"
+  rm -rf "$WORKSPACE/tmp/output-staging"
+  mkdir -p "$WORKSPACE/tmp/output-staging"
+  # Stage artifacts before archiving so accidental tool/runtime state copied into
+  # output/ (for example home/, .claude/, .cache/) never reaches output.tar.gz.
+  find "$WORKSPACE/output" -maxdepth 1 -mindepth 1 \
+    ! -name home ! -name .home ! -name .claude ! -name .cache ! -name .config ! -name .local ! -name node_modules \
+    -exec cp -a {} "$WORKSPACE/tmp/output-staging/" \; 2>/dev/null || true
+  if [ "$(find "$WORKSPACE/tmp/output-staging" -mindepth 1 -print -quit 2>/dev/null)" ]; then
+    tar -czf "$WORKSPACE/tmp/output.tar.gz" -C "$WORKSPACE/tmp/output-staging" .
+    curl -fsS -H "X-Task-Token: $TASK_TOKEN" -F "file=@$WORKSPACE/tmp/output.tar.gz" "%s/api/v1/tasks/$TASK_ID/artifacts"
+  fi
 fi
 exit "$TASK_EXIT_CODE"
 `, strings.TrimRight(serviceBaseURL, "/")))

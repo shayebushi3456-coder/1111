@@ -55,7 +55,6 @@ func Open(path string) (*gorm.DB, error) {
 		&model.EvalPrompt{},
 		&model.MCPConfig{},
 		&model.SkillConfig{},
-		&model.EnvVar{},
 	); err != nil {
 		return nil, err
 	}

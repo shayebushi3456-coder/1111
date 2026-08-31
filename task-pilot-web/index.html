@@ -63,10 +63,6 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2l2.5 5.5L20 9l-5.5 2.5L12 17l-2.5-5.5L4 9l5.5-1.5z"/><path d="M19 15l1 2 2 1-2 1-1 2-1-2-2-1 2-1z"/></svg>
         Skill
       </div>
-      <div class="nav-item" data-view="env-vars">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><circle cx="12" cy="12" r="4"/><path d="M7.5 7.5l1.5 1.5M15 15l1.5 1.5M16.5 7.5L15 9M9 15l-1.5 1.5"/></svg>
-        环境变量
-      </div>
     </div>
 
     <div class="sidebar-footer">
@@ -140,9 +136,9 @@
             <div class="stat-card-foot"><span class="muted" id="stat-cases-total">--</span></div>
           </div>
           <div class="stat-card">
-            <div class="stat-card-label">异常终止用例</div>
-            <div class="stat-card-value" id="stat-errored" style="color:var(--err)">--</div>
-            <div class="stat-card-foot"><span class="dot err"></span>需要人工排查</div>
+            <div class="stat-card-label">整体完成率</div>
+            <div class="stat-card-value" id="stat-completion-rate">--</div>
+            <div class="stat-card-foot"><span class="muted" id="stat-completion-foot">--</span></div>
           </div>
         </div>
 
@@ -404,21 +400,12 @@
             <div class="panel-body" id="csd-case-list"></div>
           </div>
 
-          <div class="caseset-detail-side">
-            <div class="panel" id="csd-tag-stats-panel">
-              <div class="panel-head">
-                <h3>按标签统计</h3>
-                <span class="muted mono" style="font-size:11.5px;" id="csd-tag-stats-sub"></span>
-              </div>
-              <div class="panel-body pad" id="csd-tag-stats"></div>
+          <div class="panel" id="csd-linked-runs-panel">
+            <div class="panel-head">
+              <h3>最近评测执行</h3>
+              <span class="muted mono" style="font-size:11.5px;" id="csd-linked-runs-count"></span>
             </div>
-            <div class="panel" id="csd-linked-runs-panel">
-              <div class="panel-head">
-                <h3>最近评测执行</h3>
-                <span class="muted mono" style="font-size:11.5px;" id="csd-linked-runs-count"></span>
-              </div>
-              <div class="row-list" id="csd-linked-runs-list"></div>
-            </div>
+            <div class="row-list" id="csd-linked-runs-list"></div>
           </div>
         </div>
       </section>
@@ -513,26 +500,6 @@
         <div id="skill-config-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;"></div>
       </section>
 
-      <!-- ============ ENV VARS ============ -->
-      <section class="view" id="view-env-vars">
-        <div class="page-head">
-          <div>
-            <h1 class="page-title">环境变量</h1>
-            <p class="page-desc">预定义敏感配置（如鉴权 Token）。用例描述中用 <code class="mono">{{KEY}}</code> 引用；派发测试任务时替换为真实 Value。Value 加密存储，列表仅展示脱敏结果。</p>
-          </div>
-          <button class="btn btn-primary" id="btn-new-env-var">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
-            新增环境变量
-          </button>
-        </div>
-        <div class="panel">
-          <div class="row-list-head" style="grid-template-columns:1.2fr 1.2fr 1.4fr 90px;">
-            <div>Key</div><div>Value</div><div>说明</div><div></div>
-          </div>
-          <div class="row-list" id="env-var-list"></div>
-        </div>
-      </section>
-
     </div>
   </div>
 </div>
@@ -570,6 +537,11 @@
   <div class="modal-box" style="width:460px;">
     <h4>新建评测执行</h4>
     <p>选择用例集与端点，创建后将排队进入二段式调度。</p>
+    <div class="field">
+      <label>任务名</label>
+      <input type="text" id="nr-name" placeholder="例如：GPT-4.1-日报用例回归-0825" />
+      <span class="row-sub" style="font-size:12px;">用于区分同一用例集的多次评测执行；留空时自动使用“用例集名称 + 时间”</span>
+    </div>
     <div class="field">
       <label>用例集</label>
       <select id="nr-caseset"></select>
@@ -646,23 +618,6 @@
     <div class="case-card-grid">
       <section class="case-card-primary">
         <div class="field"><label>用例名称</label><input type="text" class="cs-case-name" placeholder="例如：生成华东区周报"></div>
-        <div class="field-row-4">
-          <div class="field"><label>一级类型</label>
-            <select class="cs-case-level1">
-              <option value="">请选择</option>
-            </select>
-          </div>
-          <div class="field"><label>二级类型</label>
-            <select class="cs-case-level2" disabled>
-              <option value="">请先选一级类型</option>
-            </select>
-          </div>
-          <div class="field"><label>难度</label><input type="text" class="cs-case-difficulty" placeholder="例如：中"></div>
-        </div>
-        <div class="field">
-          <label>task类型（可多选）</label>
-          <div class="cs-case-task-types checkbox-chip-zone"></div>
-        </div>
         <div class="field rich-field">
           <label>任务描述（支持 Markdown）</label>
           <div class="rich-editor" data-rich-editor="description">
@@ -678,7 +633,7 @@
               <button type="button" data-md-cmd="link" title="链接">Link</button>
               <button type="button" data-md-template="goal" title="插入目标模板">目标</button>
               <button type="button" data-md-template="steps" title="插入步骤模板">步骤</button>
-              <button type="button" class="cs-insert-env" title="插入全局环境变量 {{KEY}}">{{env}}</button>
+              <button type="button" data-md-template="table" title="插入 Markdown 表格">表格</button>
               <button type="button" class="cs-md-toggle-preview" title="仅源码" style="margin-left:auto;">预览</button>
             </div>
             <div class="cs-md-editor">
@@ -716,10 +671,14 @@
           <div class="cs-case-skill-list checkbox-chip-zone"><span class="muted" style="font-size:12px;">加载中…</span></div>
         </div>
         <div class="field">
-          <label>HTML 视觉美观度评测</label>
+          <label>PPT / HTML 视觉评测（默认关闭）</label>
+          <div class="switch-row" style="margin-bottom:8px;">
+            <div class="switch cs-case-ppt-visual-switch" title="开启：产物中的 PPT/PPTX 文件转图片，评测 LLM 逐页评审排版与美观度；关闭：不转图评测"></div>
+            <span class="row-sub" style="font-size:12px;">开启 PPT 转图片视觉评测</span>
+          </div>
           <div class="switch-row">
-            <div class="switch on cs-case-html-visual-switch" title="开启：产物中的 HTML 文件转图片，评测 LLM 逐页评审排版与美观度；关闭：跳过转图/视觉评审，仅按任务描述与校验点评估其它维度"></div>
-            <span class="row-sub" style="font-size:12px;">默认开启，关闭后该用例的 HTML 产物不再转图片评测美观度</span>
+            <div class="switch cs-case-html-visual-switch" title="开启：产物中的 HTML 文件转图片，评测 LLM 逐页评审排版与美观度；关闭：不转图评测"></div>
+            <span class="row-sub" style="font-size:12px;">开启 HTML 转图片视觉评测</span>
           </div>
         </div>
       </aside>
@@ -767,11 +726,32 @@
 <!-- ============ Modal: Prompt 编辑 ============ -->
 <div class="modal" id="modal-prompt">
   <div class="modal-backdrop" data-close-modal="modal-prompt"></div>
-  <div class="modal-box" style="width:560px;">
+  <div class="modal-box prompt-modal-box">
     <h4 id="pm-modal-title">新建 Prompt</h4>
-    <p>用于指导评测 LLM 撰写 Markdown 分析报告的模板内容。</p>
+    <p>用于指导评测 LLM 撰写 Markdown 分析报告的模板内容。支持长文本编辑与实时预览。</p>
     <div class="field"><label>名称</label><input type="text" id="pm-name" placeholder="例如：严格合规版（金融场景）"></div>
-    <div class="field"><label>内容</label><textarea id="pm-content" style="min-height:180px;" placeholder="Prompt 模板内容…"></textarea></div>
+    <div class="field rich-field prompt-rich-field">
+      <div class="prompt-editor-head"><label>内容</label><span class="mono muted" id="pm-content-stats">0 行 · 0 字</span></div>
+      <div class="rich-editor prompt-rich-editor" data-rich-editor="prompt">
+        <div class="rich-toolbar" aria-label="Prompt Markdown 编辑工具栏">
+          <button type="button" data-md-cmd="bold" title="加粗 **文本**">B</button>
+          <button type="button" data-md-cmd="italic" title="斜体 *文本*"><i>I</i></button>
+          <button type="button" data-md-cmd="code" title="行内代码 `代码`">&lt;/&gt;</button>
+          <button type="button" data-md-cmd="heading" title="标题（点击升/降级）">标题</button>
+          <button type="button" data-md-cmd="ul" title="项目符号列表">• List</button>
+          <button type="button" data-md-cmd="ol" title="编号列表">1. List</button>
+          <button type="button" data-md-cmd="quote" title="引用">″ Quote</button>
+          <button type="button" data-md-cmd="codeblock" title="代码块">{ }</button>
+          <button type="button" data-md-cmd="link" title="链接">Link</button>
+          <button type="button" data-md-template="table" title="插入 Markdown 表格">表格</button>
+          <button type="button" class="cs-md-toggle-preview" title="仅源码" style="margin-left:auto;">预览</button>
+        </div>
+        <div class="cs-md-editor prompt-md-editor">
+          <textarea id="pm-content" class="cs-md-source prompt-editor-textarea mono" placeholder="Prompt 模板内容…" spellcheck="false"></textarea>
+          <div id="pm-preview" class="cs-md-preview prompt-preview md-preview"></div>
+        </div>
+      </div>
+    </div>
     <div class="field">
       <div class="switch-row">
         <div class="switch" id="pm-default-switch"></div>
@@ -817,35 +797,6 @@
     <div class="modal-actions">
       <button class="btn btn-ghost" data-close-modal="modal-skill-config">取消</button>
       <button class="btn btn-primary" id="skill-submit">保存</button>
-    </div>
-  </div>
-</div>
-
-<!-- ============ Modal: 环境变量 ============ -->
-<div class="modal" id="modal-env-var">
-  <div class="modal-backdrop" data-close-modal="modal-env-var"></div>
-  <div class="modal-box" style="width:440px;">
-    <h4 id="env-modal-title">新增环境变量</h4>
-    <p>Key 在用例描述中以 <code class="mono">{{KEY}}</code> 引用。Value 加密存储；编辑时留空表示保留原值。</p>
-    <div class="field"><label>Key</label><input type="text" id="env-key" class="mono" placeholder="例如：MAIL_API_TOKEN"></div>
-    <div class="field"><label>Value</label><input type="password" id="env-value" placeholder="编辑时留空则保留原值" autocomplete="new-password"></div>
-    <div class="field"><label>说明</label><input type="text" id="env-desc" placeholder="这个变量用在什么场景？"></div>
-    <div class="modal-actions">
-      <button class="btn btn-ghost" data-close-modal="modal-env-var">取消</button>
-      <button class="btn btn-primary" id="env-submit">保存</button>
-    </div>
-  </div>
-</div>
-
-<!-- ============ Modal: 插入环境变量 ============ -->
-<div class="modal" id="modal-insert-env">
-  <div class="modal-backdrop" data-close-modal="modal-insert-env"></div>
-  <div class="modal-box" style="width:420px;">
-    <h4>插入环境变量</h4>
-    <p>选择要插入到任务描述光标处的 <code class="mono">{{KEY}}</code>。</p>
-    <div id="insert-env-list" class="checkbox-chip-zone" style="min-height:48px;"></div>
-    <div class="modal-actions">
-      <button class="btn btn-ghost" data-close-modal="modal-insert-env">关闭</button>
     </div>
   </div>
 </div>

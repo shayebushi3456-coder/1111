@@ -41,8 +41,7 @@ func main() {
 	}
 	mcpConfigService := service.NewMCPConfigService(database)
 	skillConfigService := service.NewSkillConfigService(database)
-	envVarService := service.NewEnvVarService(database, cfg)
-	evalService := service.NewEvalService(database, cfg, taskService, caseSetService, configService, evalEndpointService, fileService, promptService, mcpConfigService, skillConfigService, envVarService)
+	evalService := service.NewEvalService(database, cfg, taskService, caseSetService, configService, evalEndpointService, fileService, promptService, mcpConfigService, skillConfigService)
 	interval := time.Duration(cfg.Scheduler.ReconcileIntervalSeconds) * time.Second
 	if interval <= 0 {
 		interval = 10 * time.Second
@@ -63,7 +62,6 @@ func main() {
 		api.NewLeaderboardHandler(evalService),
 		api.NewMCPConfigHandler(mcpConfigService),
 		api.NewSkillConfigHandler(skillConfigService),
-		api.NewEnvVarHandler(envVarService),
 	)
 	log.Printf("task-pilot listening on %s", cfg.Server.Addr)
 	if err := router.Run(cfg.Server.Addr); err != nil {

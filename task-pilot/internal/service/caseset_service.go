@@ -33,13 +33,11 @@ type CaseInput struct {
 	// model.SkillConfig），派发测试任务前会据此在执行器 Pod 内还原对应配置。
 	MCPIDs   []string
 	SkillIDs []string
-	// 数据标签：一级/二级类型为级联下拉；TaskTypes 可多选；Difficulty 手填。
-	Level1Type string
-	Level2Type string
-	TaskTypes  []string
-	Difficulty string
-	// SkipHTMLVisualScore 跳过该用例测试产物中 HTML 文件的视觉美观度评测（不转图片、
-	// 不做 layout_soft/aesthetic 评审）。默认 false：HTML 产物默认转图片走美观度评测。
+	// EnablePPTVisualScore / EnableHTMLVisualScore 是否对 PPT/HTML 类产物执行转图片视觉评测。
+	// 默认 false：不转图片、不做视觉评审；仅显式开启时执行。
+	EnablePPTVisualScore  bool
+	EnableHTMLVisualScore bool
+	// SkipHTMLVisualScore 兼容旧字段，新逻辑以 EnableHTMLVisualScore 为准。
 	SkipHTMLVisualScore bool
 }
 
@@ -98,13 +96,11 @@ func buildCases(caseSetID string, cases []CaseInput) []model.Case {
 			FileIDsJSON:         model.EncodeFileIDs(c.FileIDs),
 			MCPIDsJSON:          model.EncodeFileIDs(c.MCPIDs),
 			SkillIDsJSON:        model.EncodeFileIDs(c.SkillIDs),
-			OrderNo:             i,
-			Level1Type:          c.Level1Type,
-			Level2Type:          c.Level2Type,
-			TaskTypesJSON:       model.EncodeFileIDs(c.TaskTypes),
-			Difficulty:          c.Difficulty,
-			SkipHTMLVisualScore: c.SkipHTMLVisualScore,
-			Checkpoints:         cks,
+			OrderNo:               i,
+			EnablePPTVisualScore:  c.EnablePPTVisualScore,
+			EnableHTMLVisualScore: c.EnableHTMLVisualScore,
+			SkipHTMLVisualScore:   c.SkipHTMLVisualScore,
+			Checkpoints:           cks,
 		})
 	}
 	return out
@@ -144,7 +140,6 @@ func (s *CaseSetService) Get(id string) (*model.CaseSet, error) {
 		cs.Cases[i].FileIDs = model.DecodeFileIDs(cs.Cases[i].FileIDsJSON)
 		cs.Cases[i].MCPIDs = model.DecodeFileIDs(cs.Cases[i].MCPIDsJSON)
 		cs.Cases[i].SkillIDs = model.DecodeFileIDs(cs.Cases[i].SkillIDsJSON)
-		cs.Cases[i].TaskTypes = model.DecodeTaskTypes(cs.Cases[i].TaskTypesJSON)
 		for j := range cs.Cases[i].Checkpoints {
 			cs.Cases[i].Checkpoints[j].FileIDs = model.DecodeFileIDs(cs.Cases[i].Checkpoints[j].FileIDsJSON)
 		}

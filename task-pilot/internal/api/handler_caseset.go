@@ -31,13 +31,11 @@ func toCaseSetInput(req CaseSetRequest) service.CaseSetInput {
 			Description:         c.Description,
 			FileIDs:             c.FileIDs,
 			Checkpoints:         checkpoints,
-			MCPIDs:              c.MCPIDs,
-			SkillIDs:            c.SkillIDs,
-			Level1Type:          c.Level1Type,
-			Level2Type:          c.Level2Type,
-			TaskTypes:           c.TaskTypes,
-			Difficulty:          c.Difficulty,
-			SkipHTMLVisualScore: c.SkipHTMLVisualScore,
+			MCPIDs:                c.MCPIDs,
+			SkillIDs:              c.SkillIDs,
+			EnablePPTVisualScore:  c.EnablePPTVisualScore,
+			EnableHTMLVisualScore: c.EnableHTMLVisualScore,
+			SkipHTMLVisualScore:   c.SkipHTMLVisualScore,
 		})
 	}
 	return service.CaseSetInput{
