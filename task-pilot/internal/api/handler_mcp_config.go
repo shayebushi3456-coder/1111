@@ -32,7 +32,7 @@ func (h *MCPConfigHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, ErrorResponse{Error: err.Error()})
 		return
 	}
-	m, err := h.mcp.Create(service.UpsertMCPConfigInput{
+	m, err := h.mcp.Create(CurrentProjectID(c), service.UpsertMCPConfigInput{
 		Name:        req.Name,
 		Description: req.Description,
 		ConfigJSON:  req.ConfigJSON,
@@ -45,7 +45,7 @@ func (h *MCPConfigHandler) Create(c *gin.Context) {
 }
 
 func (h *MCPConfigHandler) List(c *gin.Context) {
-	items, err := h.mcp.List()
+	items, err := h.mcp.List(CurrentProjectID(c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
 		return
@@ -58,7 +58,7 @@ func (h *MCPConfigHandler) List(c *gin.Context) {
 }
 
 func (h *MCPConfigHandler) Get(c *gin.Context) {
-	m, err := h.mcp.Get(c.Param("id"))
+	m, err := h.mcp.GetInProject(CurrentProjectID(c), c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusNotFound, ErrorResponse{Error: err.Error()})
 		return
@@ -72,7 +72,7 @@ func (h *MCPConfigHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, ErrorResponse{Error: err.Error()})
 		return
 	}
-	m, err := h.mcp.Update(c.Param("id"), service.UpsertMCPConfigInput{
+	m, err := h.mcp.Update(CurrentProjectID(c), c.Param("id"), service.UpsertMCPConfigInput{
 		Name:        req.Name,
 		Description: req.Description,
 		ConfigJSON:  req.ConfigJSON,
@@ -85,7 +85,7 @@ func (h *MCPConfigHandler) Update(c *gin.Context) {
 }
 
 func (h *MCPConfigHandler) Delete(c *gin.Context) {
-	if err := h.mcp.Delete(c.Param("id")); err != nil {
+	if err := h.mcp.Delete(CurrentProjectID(c), c.Param("id")); err != nil {
 		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
 		return
 	}

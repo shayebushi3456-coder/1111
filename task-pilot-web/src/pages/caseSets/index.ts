@@ -2,14 +2,19 @@ import { caseSetsApi } from '@/api/caseSets';
 import { filesApi } from '@/api/files';
 import { downloadZip } from '@/lib/minizip';
 import { decodeZipText, unzip, type UnzipEntry } from '@/lib/unzip';
-import { escapeAttr, escapeHtml, emptyStateHtml, errorStateHtml, fmtTime, skeletonRows } from '@/lib/ui';
+import { escapeAttr, escapeHtml, emptyStateHtml, errorStateHtml, fmtSize, fmtTime, skeletonRows } from '@/lib/ui';
 import { badgeHtml, RUN_STATUS_MAP } from '@/lib/status';
 import { addCheckpointFromInput, renderCheckpointEditor, setupRichEditor, type CheckpointDraft } from '@/lib/richEditor';
-import { blobToBytes, normalizeZipPath, safeExportFilename, sanitizeFolderName } from '@/lib/filePreview';
+import { iconTypeOf, blobToBytes, normalizeZipPath, safeExportFilename, sanitizeFolderName } from '@/lib/filePreview';
+import { pageInfoText, renderPagination } from '@/core/pagination';
 import { cache, loadCaseSets, loadEvalRuns, loadMCPConfigs, loadSkillConfigs } from '@/core/dataCache';
 import { closeModal, confirmAction, errMsg, openModal, toast, toastError } from '@/core/feedback';
+import { openDrawer } from '@/features/preview/previewRuntime';
+import { renderJSON, renderMarkdown } from '@/lib/renderers';
+import { hasPermission } from '@/core/auth';
+import { canWrite as canWriteProject, canDownload as canDownloadProject, requireWrite as requireWriteProject } from '@/core/project';
 import type { AppView } from '@/core/router';
-import type { CaseItem, CaseRequestInput, CaseSet, CheckpointRequestInput, EvalRun, MCPConfig, SkillConfig } from '@/types';
+import type { CaseItem, CaseRequestInput, CaseSet, CaseSetRequestInput, CheckpointRequestInput, EvalRun, FileResponse, MCPConfig, SkillConfig } from '@/types';
 
 type RouteTo = (view: AppView, param?: string) => void;
 type ShowView = (view: AppView, crumbHtml?: string) => void;
@@ -18,6 +23,7 @@ let showView: ShowView = () => {};
 let setCrumbs: (html: string) => void = () => {};
 let openNewEvalRunModalFor: (caseSetId: string) => void = () => {};
 let activeCaseSetId: string | null = null;
+let caseSetListState = { page: 1, pageSize: 20, q: '' };
 
 export function initCaseSetPages(deps: { routeTo: RouteTo; showView: ShowView; setCrumbs: (html: string) => void; openNewEvalRunModalFor: (caseSetId: string) => void }): void {
   routeTo = deps.routeTo;
@@ -35,21 +41,45 @@ export async function renderCaseSetGrid(): Promise<void> {
   const wrap = document.getElementById('caseset-grid')!;
   wrap.innerHTML = skeletonRows(4, 130);
   let caseSets: CaseSet[];
+  let total = 0;
+  let page = caseSetListState.page;
+  let pageSize = caseSetListState.pageSize;
   let runs: EvalRun[];
   try {
-    [caseSets, runs] = await Promise.all([loadCaseSets(true), loadEvalRuns()]);
+    const [res, allRuns] = await Promise.all([
+      caseSetsApi.listPaged({ page: caseSetListState.page, page_size: caseSetListState.pageSize, q: caseSetListState.q || undefined }),
+      loadEvalRuns(),
+    ]);
+    caseSets = res.case_sets || [];
+    total = res.total ?? caseSets.length;
+    page = res.page || caseSetListState.page;
+    pageSize = res.page_size || caseSetListState.pageSize;
+    runs = allRuns;
   } catch (e) {
     wrap.innerHTML = errorStateHtml(errMsg(e));
     return;
   }
-  document.getElementById('nav-count-casesets')!.textContent = String(caseSets.length);
+  const search = document.getElementById('cs-search') as HTMLInputElement;
+  if (search && search.value !== caseSetListState.q) search.value = caseSetListState.q;
+  document.getElementById('nav-count-casesets')!.textContent = String(total);
+  document.getElementById('cs-page-info')!.textContent = pageInfoText(total, page, pageSize);
+  renderPagination(document.getElementById('cs-pagination')!, { page, pageSize, total }, next => {
+    caseSetListState.page = next;
+    renderCaseSetGrid();
+  });
+  const canWriteCs = canWriteProject();
+  const newBtn = document.getElementById('btn-new-caseset') as HTMLButtonElement | null;
+  if (newBtn) newBtn.style.display = canWriteCs ? '' : 'none';
+  const importBtn = document.getElementById('btn-import-caseset') as HTMLButtonElement | null;
+  if (importBtn) importBtn.style.display = canWriteCs ? '' : 'none';
   const selectAllBox = document.getElementById('cs-select-all') as HTMLInputElement;
   const batchDeleteBtn = document.getElementById('cs-batch-delete-btn') as HTMLButtonElement;
   const selCountEl = document.getElementById('cs-selected-count') as HTMLElement;
   selectAllBox.checked = false;
   batchDeleteBtn.disabled = true;
+  batchDeleteBtn.style.display = canWriteCs ? '' : 'none';
   selCountEl.style.display = 'none';
-  if (caseSets.length === 0) { wrap.innerHTML = emptyStateHtml('还没有用例集', '点击右上角新建用例集开始配置评测用例。'); return; }
+  if (caseSets.length === 0) { wrap.innerHTML = emptyStateHtml(caseSetListState.q ? '没有匹配的用例集' : '还没有用例集', caseSetListState.q ? '换个关键词试试。' : '点击右上角新建用例集开始配置评测用例。'); return; }
   wrap.innerHTML = caseSets.map((cs, i) => {
     const linked = linkedRunsOf(cs.id, runs).length;
     return `
@@ -68,13 +98,17 @@ export async function renderCaseSetGrid(): Promise<void> {
           <span>更新于 ${fmtTime(cs.updated_at).split(' ')[0]}</span>
         </div>
       </div>
-      <div style="padding:10px 18px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;">
-        <button class="btn btn-ghost btn-sm" style="color:var(--err);border-color:var(--err-soft);" data-del-cs="${cs.id}">删除</button>
+      <div style="padding:10px 18px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:8px;">
+        ${canWriteCs ? `<button class="btn btn-ghost btn-sm" data-clone-cs="${cs.id}">克隆</button><button class="btn btn-ghost btn-sm" style="color:var(--err);border-color:var(--err-soft);" data-del-cs="${cs.id}">删除</button>` : ''}
       </div>
     </div>
   `;
   }).join('');
   wrap.querySelectorAll('[data-open-cs]').forEach(el => el.addEventListener('click', () => routeTo('caseset-detail', el.getAttribute('data-open-cs')!)));
+  wrap.querySelectorAll('[data-clone-cs]').forEach(el => el.addEventListener('click', (e) => {
+    e.stopPropagation();
+    requestCloneCaseSet(el.getAttribute('data-clone-cs')!);
+  }));
   wrap.querySelectorAll('[data-del-cs]').forEach(el => el.addEventListener('click', (e) => {
     e.stopPropagation();
     requestDeleteCaseSet(el.getAttribute('data-del-cs')!, runs, () => renderCaseSetGrid());
@@ -91,6 +125,7 @@ export async function renderCaseSetGrid(): Promise<void> {
   };
   wrap.querySelectorAll('.cs-row-check').forEach(cb => cb.addEventListener('click', (e) => { e.stopPropagation(); refreshCsSelection(); }));
   batchDeleteBtn.onclick = () => {
+    if (!requireWriteProject('删除用例集')) return;
     const ids = Array.from(wrap.querySelectorAll<HTMLInputElement>('.cs-row-check:checked')).map(cb => cb.getAttribute('data-cs-check')!);
     if (ids.length === 0) return;
     const linkedTotal = ids.reduce((s, id) => s + linkedRunsOf(id, runs).length, 0);
@@ -106,6 +141,41 @@ export async function renderCaseSetGrid(): Promise<void> {
       renderCaseSetGrid();
     });
   };
+}
+
+function caseSetCloneInput(source: CaseSet): CaseSetRequestInput {
+  return {
+    name: `${source.name}（副本）`,
+    description: source.description,
+    cases: (source.cases || []).map(c => ({
+      name: c.name,
+      description: c.description,
+      file_ids: [...(c.file_ids || [])],
+      checkpoints: (c.checkpoints || []).map(cp => ({
+        description: cp.description,
+        file_ids: [...(cp.file_ids || [])],
+      })),
+      mcp_ids: [...(c.mcp_ids || [])],
+      skill_ids: [...(c.skill_ids || [])],
+      enable_ppt_visual_score: !!c.enable_ppt_visual_score,
+      enable_html_visual_score: !!c.enable_html_visual_score,
+      skip_html_visual_score: !c.enable_html_visual_score,
+    })),
+  };
+}
+
+async function requestCloneCaseSet(id: string): Promise<void> {
+  if (!requireWriteProject('克隆用例集')) return;
+  try {
+    toast('正在克隆用例集…');
+    const source = await caseSetsApi.get(id);
+    const created = await caseSetsApi.create(caseSetCloneInput(source));
+    cache.caseSets = null;
+    toast('用例集已克隆');
+    routeTo('caseset-detail', created.id);
+  } catch (e) {
+    toastError('克隆失败', e);
+  }
 }
 
 /* 删除用例集：后端为软删除，不检查引用（EvalRun 创建时已快照用例集内容到 SnapshotJSON），
@@ -129,8 +199,13 @@ function requestDeleteCaseSet(id: string, runs: EvalRun[], onDone?: () => void):
   });
 }
 
-document.getElementById('btn-new-caseset')!.addEventListener('click', () => openCaseSetModal(null));
-document.getElementById('btn-import-caseset')!.addEventListener('click', importCaseSetFromZip);
+document.getElementById('btn-new-caseset')!.addEventListener('click', () => { if (requireWriteProject('新建用例集')) openCaseSetModal(null); });
+document.getElementById('btn-import-caseset')!.addEventListener('click', () => { if (requireWriteProject('导入用例集')) importCaseSetFromZip(); });
+document.getElementById('cs-search')?.addEventListener('input', (e) => {
+  caseSetListState.q = (e.target as HTMLInputElement).value.trim();
+  caseSetListState.page = 1;
+  window.setTimeout(() => renderCaseSetGrid(), 150);
+});
 document.getElementById('btn-download-caseset-template')!.addEventListener('click', downloadCaseSetImportTemplate);
 
 interface CaseSetImportManifest {
@@ -155,12 +230,29 @@ interface CheckpointImportItem {
   files: string[];
 }
 
-function findZipEntry(entries: UnzipEntry[], path: string): UnzipEntry | undefined {
-  const normalized = normalizeZipPath(path);
-  return entries.find(e => normalizeZipPath(e.name) === normalized);
+function isIgnoredZipEntry(entryName: string): boolean {
+  const parts = normalizeZipPath(entryName).split('/');
+  return parts.some(part => part === '__MACOSX' || part === '.DS_Store' || part.startsWith('._'));
+}
+function findZipEntry(entries: UnzipEntry[], path: string, basePath = ''): UnzipEntry | undefined {
+  const normalized = normalizeZipPath(basePath ? `${basePath}/${path}` : path);
+  return entries.find(e => !isIgnoredZipEntry(e.name) && normalizeZipPath(e.name) === normalized);
+}
+function findCaseSetManifest(entries: UnzipEntry[]): { entry: UnzipEntry; basePath: string } | undefined {
+  const rootManifest = findZipEntry(entries, 'manifest.json') || findZipEntry(entries, 'caseset.json');
+  if (rootManifest) return { entry: rootManifest, basePath: '' };
+  const nestedManifest = entries
+    .filter(e => !isIgnoredZipEntry(e.name))
+    .map(e => normalizeZipPath(e.name))
+    .filter(name => name.endsWith('/manifest.json') || name.endsWith('/caseset.json'))
+    .sort((a, b) => a.split('/').length - b.split('/').length || a.localeCompare(b))[0];
+  if (!nestedManifest) return undefined;
+  const entry = entries.find(e => !isIgnoredZipEntry(e.name) && normalizeZipPath(e.name) === nestedManifest);
+  if (!entry) return undefined;
+  return { entry, basePath: nestedManifest.split('/').slice(0, -1).join('/') };
 }
 function zipEntryFile(entry: UnzipEntry): File {
-  const filename = entry.name.split('/').pop() || entry.name;
+  const filename = normalizeZipPath(entry.name).split('/').pop() || entry.name;
   return new File([entry.data as BlobPart], filename);
 }
 function asStringArray(value: unknown, fieldName: string): string[] {
@@ -211,15 +303,15 @@ async function importCaseSetFromZip(): Promise<void> {
     toast('正在解析用例集 ZIP…');
     try {
       const entries = await unzip(file);
-      const manifestEntry = findZipEntry(entries, 'manifest.json') || findZipEntry(entries, 'caseset.json');
-      if (!manifestEntry) throw new Error('ZIP 根目录缺少 manifest.json');
-      const manifest = validateImportedManifest(JSON.parse(decodeZipText(manifestEntry)) as CaseSetImportManifest);
+      const manifestInfo = findCaseSetManifest(entries);
+      if (!manifestInfo) throw new Error('ZIP 缺少 manifest.json');
+      const manifest = validateImportedManifest(JSON.parse(decodeZipText(manifestInfo.entry)) as CaseSetImportManifest);
       const cases: CaseRequestInput[] = [];
       let uploadedCount = 0;
       for (const c of manifest.cases) {
         const fileIds: string[] = [];
         for (const path of c.files) {
-          const entry = findZipEntry(entries, path);
+          const entry = findZipEntry(entries, path, manifestInfo.basePath);
           if (!entry) throw new Error(`未找到附件文件：${path}`);
           const uploaded = await filesApi.uploadInput(zipEntryFile(entry));
           fileIds.push(uploaded.file_id);
@@ -229,7 +321,7 @@ async function importCaseSetFromZip(): Promise<void> {
         for (const cp of c.checkpoints) {
           const cpFileIds: string[] = [];
           for (const path of cp.files) {
-            const entry = findZipEntry(entries, path);
+            const entry = findZipEntry(entries, path, manifestInfo.basePath);
             if (!entry) throw new Error(`未找到校验点参考文件：${path}`);
             const uploaded = await filesApi.uploadInput(zipEntryFile(entry));
             cpFileIds.push(uploaded.file_id);
@@ -405,8 +497,13 @@ export async function openCaseSetDetail(id: string): Promise<void> {
   document.getElementById('csd-case-count')!.textContent = `${cases.length} 条用例`;
   const wrap = document.getElementById('csd-case-list')!;
   const [mcpConfigsForLabels, skillConfigsForLabels] = await Promise.all([loadMCPConfigs(), loadSkillConfigs()]).catch(() => [[], []] as [MCPConfig[], SkillConfig[]]);
+  await loadFileNameMap(cases.flatMap(c => [
+    ...(Array.isArray(c.file_ids) ? c.file_ids : []),
+    ...(Array.isArray(c.checkpoints) ? c.checkpoints.flatMap(cp => cp.file_ids || []) : []),
+  ]));
   const mcpNameOf = (id: string) => mcpConfigsForLabels.find(m => m.id === id)?.name || id;
   const skillNameOf = (id: string) => skillConfigsForLabels.find(sk => sk.id === id)?.name || id;
+  const canDownloadFiles = hasPermission('file:download') && canDownloadProject();
   wrap.innerHTML = cases.length === 0 ? emptyStateHtml('用例集为空', '') : cases.map((c, i) => {
     const fileIds = Array.isArray(c.file_ids) ? c.file_ids : [];
     const checkpoints = Array.isArray(c.checkpoints) ? c.checkpoints : [];
@@ -423,9 +520,9 @@ export async function openCaseSetDetail(id: string): Promise<void> {
       </div>
       <p style="font-size:13px;color:var(--steel);margin-bottom:10px;">${escapeHtml(c.description)}</p>
       <div class="flex gap-8" style="flex-wrap:wrap;margin-bottom:10px;">
-        ${fileIds.map(fid => `<a class="chip" href="${escapeAttr(filesApi.downloadUrl(fid))}" target="_blank" rel="noopener">
-          <span class="mono">▢</span> ${escapeHtml(fid)}
-        </a>`).join('')}
+        ${fileIds.map(fid => canDownloadFiles ? `<a class="chip" href="${escapeAttr(filesApi.downloadUrl(fid))}" target="_blank" rel="noopener" title="${escapeAttr(fid)}">
+          <span class="mono">▢</span> ${escapeHtml(fileLabel(fid))}
+        </a>` : `<span class="chip" title="游客只读模式不支持下载"><span class="mono">▢</span> ${escapeHtml(fileLabel(fid))}</span>`).join('')}
       </div>
       ${(mcpIds.length > 0 || skillIds.length > 0 || c.enable_ppt_visual_score || c.enable_html_visual_score) ? `<div class="flex gap-8" style="flex-wrap:wrap;margin-bottom:10px;">
         ${mcpIds.map(id => `<span class="chip active" title="MCP 服务器">⚙ ${escapeHtml(mcpNameOf(id))}</span>`).join('')}
@@ -436,16 +533,27 @@ export async function openCaseSetDetail(id: string): Promise<void> {
       <details>
         <summary style="cursor:pointer;font-size:12px;color:var(--quiet);font-family:var(--font-mono);">校验点（${checkpoints.length}，仅评测阶段可见）</summary>
         <ul style="margin:8px 0 0;padding-left:20px;font-size:12.5px;color:var(--steel);line-height:1.8;">
-          ${checkpoints.map(cp => `<li>${escapeHtml(cp.description)}${(cp.file_ids && cp.file_ids.length > 0) ? ` <span class="muted" style="font-size:11px;">（${cp.file_ids.length} 个参考文件）</span>` : ''}</li>`).join('')}
+          ${checkpoints.map(cp => `<li>${escapeHtml(cp.description)}${(cp.file_ids && cp.file_ids.length > 0) ? ` <span class="muted" style="font-size:11px;">（参考文件：${cp.file_ids.map(fileLabel).map(escapeHtml).join('、')}）</span>` : ''}</li>`).join('')}
         </ul>
       </details>
     </div>`;
   }).join('');
 
+  const canExportCaseSet = hasPermission('case_set:export') && canDownloadFiles;
   (document.getElementById('csd-run-btn') as HTMLButtonElement).onclick = () => openNewEvalRunModalFor(id);
-  (document.getElementById('csd-export-btn') as HTMLButtonElement).onclick = () => exportCaseSetZip(cs);
-  (document.getElementById('csd-edit-btn') as HTMLButtonElement).onclick = () => openCaseSetModal(cs);
-  (document.getElementById('csd-delete-btn') as HTMLButtonElement).onclick = () => requestDeleteCaseSet(id, runs, () => routeTo('casesets'));
+  const exportBtn = document.getElementById('csd-export-btn') as HTMLButtonElement;
+  exportBtn.style.display = canExportCaseSet ? 'inline-flex' : 'none';
+  exportBtn.onclick = () => exportCaseSetZip(cs);
+  const canWriteCs = canWriteProject();
+  const cloneBtn = document.getElementById('csd-clone-btn') as HTMLButtonElement;
+  cloneBtn.style.display = canWriteCs ? '' : 'none';
+  cloneBtn.onclick = () => requestCloneCaseSet(id);
+  const editBtn = document.getElementById('csd-edit-btn') as HTMLButtonElement;
+  editBtn.style.display = canWriteCs ? '' : 'none';
+  editBtn.onclick = () => openCaseSetModal(cs);
+  const deleteBtn = document.getElementById('csd-delete-btn') as HTMLButtonElement;
+  deleteBtn.style.display = canWriteCs ? '' : 'none';
+  deleteBtn.onclick = () => requestDeleteCaseSet(id, runs, () => routeTo('casesets'));
 }
 
 /* ---- 用例集新建/编辑弹窗 ----
@@ -461,29 +569,286 @@ interface CaseEditorRow {
   enablePPTVisualScore: boolean;
   enableHTMLVisualScore: boolean;
   skipHTMLVisualScore: boolean;
+  renderCheckpointFileHtml?: (cp: CheckpointDraft, idx: number) => string;
+  onCheckpointChange?: () => void;
+  onCheckpointRender?: () => void;
 }
 let csEditorRows: CaseEditorRow[] = [];
 let csActiveIndex = 0;
 let csEditingId: string | null = null;
+const fileNameCache = new Map<string, string>();
+const fileMetaCache = new Map<string, FileResponse>();
 
+async function loadFileNameMap(fileIds: string[]): Promise<Map<string, string>> {
+  const unique = Array.from(new Set(fileIds.filter(Boolean)));
+  await Promise.all(unique.map(async fid => {
+    if (fileNameCache.has(fid)) return;
+    try {
+      const meta = await filesApi.get(fid);
+      fileMetaCache.set(fid, meta);
+      fileNameCache.set(fid, meta.filename || fid);
+    } catch {
+      fileNameCache.set(fid, fid);
+    }
+  }));
+  return fileNameCache;
+}
+
+function fileLabel(fid: string): string {
+  return fileMetaCache.get(fid)?.filename || fileNameCache.get(fid) || fid;
+}
+function fileMetaText(meta: FileResponse | undefined, name: string, usage: string): string {
+  const size = meta?.size ? ` · ${fmtSize(meta.size)}` : '';
+  return `${fileKindLabel(name)} · ${usage}${size}`;
+}
+function compactFileId(fid: string): string {
+  return fid.length > 24 ? `${fid.slice(0, 12)}…${fid.slice(-8)}` : fid;
+}
+function fileKindLabel(name: string): string {
+  const ext = name.split('.').pop()?.toUpperCase() || 'FILE';
+  return ext.length > 5 ? 'FILE' : ext;
+}
+function fileIconHtml(name: string, label?: string): string {
+  const icon = escapeHtml(label || fileKindLabel(name));
+  return `<div class="file-asset-icon mono ${escapeAttr(iconTypeOf(name))}">${icon}</div>`;
+}
+function localDownload(file: File): void {
+  const url = URL.createObjectURL(file);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = file.name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 500);
+}
+async function openFilePreview(name: string, blob: Blob, usage: string): Promise<void> {
+  const ext = name.split('.').pop()?.toLowerCase() || '';
+  const iconType = iconTypeOf(name);
+  const download = { url: URL.createObjectURL(blob), filename: name, revoke: true };
+  const sizeText = fmtSize(blob.size);
+  try {
+    if (ext === 'md') {
+      openDrawer(name, `${usage} · Markdown · ${sizeText}`, `<div class="drawer-body pad"><div class="md-preview">${renderMarkdown(await blob.text())}</div></div>`, iconType, download);
+      return;
+    }
+    if (ext === 'json') {
+      const text = await blob.text();
+      try {
+        openDrawer(name, `${usage} · JSON · ${sizeText}`, `<div class="json-viewer">${renderJSON(JSON.parse(text))}</div>`, iconType, download);
+      } catch {
+        openDrawer(name, `${usage} · JSON（原文） · ${sizeText}`, `<pre style="padding:18px;white-space:pre-wrap;word-break:break-word;">${escapeHtml(text)}</pre>`, iconType, download);
+      }
+      return;
+    }
+    if (ext === 'html' || ext === 'htm') {
+      openDrawer(name, `${usage} · HTML 预览 · ${sizeText}`, `<iframe class="html-preview-frame" sandbox="" srcdoc="${escapeAttr(await blob.text())}"></iframe>`, iconType, download);
+      return;
+    }
+    if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext)) {
+      openDrawer(name, `${usage} · 图片 · ${sizeText}`, `<div style="padding:18px;"><img src="${download.url}" style="max-width:100%;border-radius:8px;border:1px solid var(--line);" alt="${escapeAttr(name)}"></div>`, iconType, download);
+      return;
+    }
+    if (ext === 'pdf') {
+      openDrawer(name, `${usage} · PDF · ${sizeText}`, `<iframe class="html-preview-frame" sandbox="allow-downloads" src="${download.url}"></iframe>`, iconType, download);
+      return;
+    }
+    if (['pptx', 'docx', 'xlsx', 'zip'].includes(ext)) {
+      openDrawer(name, `${usage} · ${fileKindLabel(name)} · ${sizeText}`, `<div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16"/></svg><h4>该文件建议下载查看</h4><p>浏览器无法可靠内嵌预览 ${escapeHtml(fileKindLabel(name))} 文件，可使用右上角下载按钮打开本地应用查看。</p></div>`, iconType, download);
+      return;
+    }
+    if (blob.type.startsWith('text/') || ['csv', 'tsv', 'txt', 'log', 'yaml', 'yml', 'xml'].includes(ext)) {
+      openDrawer(name, `${usage} · 文本 · ${sizeText}`, `<pre style="padding:18px;white-space:pre-wrap;word-break:break-word;">${escapeHtml(await blob.text())}</pre>`, iconType, download);
+      return;
+    }
+    openDrawer(name, `${usage} · ${sizeText}`, `<div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16"/></svg><h4>暂不支持内嵌预览</h4><p>可使用右上角下载按钮查看原始文件。</p></div>`, iconType, download);
+  } catch (e) {
+    URL.revokeObjectURL(download.url);
+    throw e;
+  }
+}
+async function previewExistingFile(fid: string, usage: string): Promise<void> {
+  const name = fileLabel(fid);
+  openDrawer(name, `${usage} · 加载中…`, `<div class="drawer-body pad">${skeletonRows(4, 40)}</div>`, iconTypeOf(name));
+  const blob = await filesApi.downloadBlob(fid);
+  await openFilePreview(name, blob, usage);
+}
+function bindCaseFileActions(row: CaseEditorRow): void {
+  row.card.querySelectorAll<HTMLElement>('[data-preview-existing-file]').forEach(el => {
+    if (el.dataset.bound) return;
+    el.dataset.bound = '1';
+    el.addEventListener('click', () => previewExistingFile(el.getAttribute('data-preview-existing-file')!, el.getAttribute('data-file-usage') || '文件').catch(e => toastError('预览失败', e)));
+  });
+  row.card.querySelectorAll<HTMLElement>('[data-preview-new-file]').forEach(el => {
+    if (el.dataset.bound) return;
+    el.dataset.bound = '1';
+    el.addEventListener('click', () => {
+      const [kind, idx, fidx] = el.getAttribute('data-preview-new-file')!.split(':');
+      const file = kind === 'case' ? row.newFiles[Number(idx)] : row.checkpoints[Number(idx)]?.newFiles[Number(fidx)];
+      if (file) openFilePreview(file.name, file, el.getAttribute('data-file-usage') || '文件').catch(e => toastError('预览失败', e));
+    });
+  });
+  row.card.querySelectorAll<HTMLElement>('[data-download-new-file]').forEach(el => {
+    if (el.dataset.bound) return;
+    el.dataset.bound = '1';
+    el.addEventListener('click', () => {
+      const [kind, idx, fidx] = el.getAttribute('data-download-new-file')!.split(':');
+      const file = kind === 'case' ? row.newFiles[Number(idx)] : row.checkpoints[Number(idx)]?.newFiles[Number(fidx)];
+      if (file) localDownload(file);
+    });
+  });
+  row.card.querySelectorAll<HTMLInputElement>('[data-replace-existing-file]').forEach(input => {
+    if (input.dataset.bound) return;
+    input.dataset.bound = '1';
+    input.addEventListener('change', () => {
+      const idx = Number(input.getAttribute('data-replace-existing-file'));
+      const files = Array.from(input.files || []);
+      if (files.length > 0) {
+        row.existingFileIds.splice(idx, 1);
+        row.newFiles.push(...files);
+        renderCaseCardFiles(row);
+      }
+      input.value = '';
+    });
+  });
+  row.card.querySelectorAll<HTMLInputElement>('[data-replace-new-file]').forEach(input => {
+    if (input.dataset.bound) return;
+    input.dataset.bound = '1';
+    input.addEventListener('change', () => {
+      const idx = Number(input.getAttribute('data-replace-new-file'));
+      const files = Array.from(input.files || []);
+      if (files.length > 0) {
+        row.newFiles.splice(idx, 1, ...files);
+        renderCaseCardFiles(row);
+      }
+      input.value = '';
+    });
+  });
+  row.card.querySelectorAll<HTMLInputElement>('[data-ckpt-replace-existing-file]').forEach(input => {
+    if (input.dataset.bound) return;
+    input.dataset.bound = '1';
+    input.addEventListener('change', () => {
+      const [idx, fidx] = input.getAttribute('data-ckpt-replace-existing-file')!.split(':').map(Number);
+      const files = Array.from(input.files || []);
+      if (files.length > 0) {
+        row.checkpoints[idx].existingFileIds.splice(fidx, 1);
+        row.checkpoints[idx].newFiles.push(...files);
+        renderCheckpointEditor(row);
+      }
+      input.value = '';
+    });
+  });
+  row.card.querySelectorAll<HTMLInputElement>('[data-ckpt-replace-new-file]').forEach(input => {
+    if (input.dataset.bound) return;
+    input.dataset.bound = '1';
+    input.addEventListener('change', () => {
+      const [idx, fidx] = input.getAttribute('data-ckpt-replace-new-file')!.split(':').map(Number);
+      const files = Array.from(input.files || []);
+      if (files.length > 0) {
+        row.checkpoints[idx].newFiles.splice(fidx, 1, ...files);
+        renderCheckpointEditor(row);
+      }
+      input.value = '';
+    });
+  });
+}
+
+function existingFileAssetHtml(fid: string, idx: number, usage: 'input' | 'reference', checkpointIdx?: number): string {
+  const label = fileLabel(fid);
+  const meta = fileMetaCache.get(fid);
+  const usageText = usage === 'input' ? '输入文件 · Agent 可见' : `参考文件 · 校验点 #${(checkpointIdx ?? 0) + 1} · 仅评测可见`;
+  const removeAttr = usage === 'input' ? `data-remove-existing="${idx}"` : `data-ckpt-remove-existing-file="${checkpointIdx}:${idx}"`;
+  const replaceAttr = usage === 'input' ? `data-replace-existing-file="${idx}"` : `data-ckpt-replace-existing-file="${checkpointIdx}:${idx}"`;
+  const download = hasPermission('file:download') && canDownloadProject()
+    ? `<a href="${escapeAttr(filesApi.downloadUrl(fid))}" target="_blank" rel="noopener">下载</a>`
+    : '';
+  return `<div class="file-asset-row" title="${escapeAttr(`${label} (${fid})`)}">
+    ${fileIconHtml(label)}
+    <div class="file-asset-meta">
+      <b>${escapeHtml(label)}</b>
+      <span>${escapeHtml(fileMetaText(meta, label, usageText))}</span>
+      <em title="${escapeAttr(fid)}">id: ${escapeHtml(compactFileId(fid))}</em>
+    </div>
+    <div class="file-asset-actions">
+      <button type="button" data-preview-existing-file="${escapeAttr(fid)}" data-file-usage="${escapeAttr(usageText)}">预览</button>
+      ${download}
+      <label>替换<input type="file" ${replaceAttr}></label>
+      <button type="button" class="danger" ${removeAttr}>解绑</button>
+    </div>
+  </div>`;
+}
+function newFileAssetHtml(file: File, idx: number, usage: 'input' | 'reference', checkpointIdx?: number): string {
+  const usageText = usage === 'input' ? '输入文件 · 待保存 · Agent 可见' : `参考文件 · 校验点 #${(checkpointIdx ?? 0) + 1} · 待保存 · 仅评测可见`;
+  const previewValue = usage === 'input' ? `case:${idx}` : `checkpoint:${checkpointIdx}:${idx}`;
+  const removeAttr = usage === 'input' ? `data-remove-new="${idx}"` : `data-ckpt-remove-new-file="${checkpointIdx}:${idx}"`;
+  const replaceAttr = usage === 'input' ? `data-replace-new-file="${idx}"` : `data-ckpt-replace-new-file="${checkpointIdx}:${idx}"`;
+  return `<div class="file-asset-row is-new" title="${escapeAttr(file.name)}">
+    ${fileIconHtml(file.name)}
+    <div class="file-asset-meta">
+      <b>${escapeHtml(file.name)}</b>
+      <span>${escapeHtml(fileKindLabel(file.name))} · ${escapeHtml(usageText)} · ${fmtSize(file.size)}</span>
+      <em>本次新上传，保存后生成文件 ID</em>
+    </div>
+    <div class="file-asset-actions">
+      <button type="button" data-preview-new-file="${escapeAttr(previewValue)}" data-file-usage="${escapeAttr(usageText)}">预览</button>
+      <button type="button" data-download-new-file="${escapeAttr(previewValue)}">下载</button>
+      <label>替换<input type="file" ${replaceAttr}></label>
+      <button type="button" class="danger" ${removeAttr}>移除</button>
+    </div>
+  </div>`;
+}
+function renderCheckpointReferenceFiles(row: CaseEditorRow, cp: CheckpointDraft, idx: number): string {
+  const rows = [
+    ...cp.existingFileIds.map((fid, fidx) => existingFileAssetHtml(fid, fidx, 'reference', idx)),
+    ...cp.newFiles.map((file, fidx) => newFileAssetHtml(file, fidx, 'reference', idx)),
+  ];
+  return rows.join('') || '<div class="file-empty-hint">暂无参考文件</div>';
+}
+function renderReferenceSummary(row: CaseEditorRow): void {
+  const wrap = row.card.querySelector('.cs-reference-files') as HTMLElement | null;
+  if (!wrap) return;
+  const rows = row.checkpoints.flatMap((cp, cpIdx) => [
+    ...cp.existingFileIds.map((fid, fidx) => existingFileAssetHtml(fid, fidx, 'reference', cpIdx).replace(/data-ckpt-remove-existing-file=/g, 'data-ref-remove-existing-file=')),
+    ...cp.newFiles.map((file, fidx) => newFileAssetHtml(file, fidx, 'reference', cpIdx).replace(/data-ckpt-remove-new-file=/g, 'data-ref-remove-new-file=')),
+  ]);
+  wrap.innerHTML = rows.join('') || '<div class="file-empty-hint">暂无参考文件</div>';
+  wrap.querySelectorAll('[data-ref-remove-existing-file]').forEach(el => el.addEventListener('click', () => {
+    const [idx, fidx] = el.getAttribute('data-ref-remove-existing-file')!.split(':').map(Number);
+    row.checkpoints[idx].existingFileIds.splice(fidx, 1);
+    renderCheckpointEditor(row);
+    renderReferenceSummary(row);
+    renderCaseOutline();
+  }));
+  wrap.querySelectorAll('[data-ref-remove-new-file]').forEach(el => el.addEventListener('click', () => {
+    const [idx, fidx] = el.getAttribute('data-ref-remove-new-file')!.split(':').map(Number);
+    row.checkpoints[idx].newFiles.splice(fidx, 1);
+    renderCheckpointEditor(row);
+    renderReferenceSummary(row);
+    renderCaseOutline();
+  }));
+  bindCaseFileActions(row);
+}
 function renderCaseCardFiles(row: CaseEditorRow): void {
   const wrap = row.card.querySelector('.cs-case-files') as HTMLElement;
-  const chips: string[] = [];
-  row.existingFileIds.forEach((fid, idx) => {
-    chips.push(`<span class="chip" data-existing-idx="${idx}"><span class="mono">▢</span> ${escapeHtml(fid)} <span style="cursor:pointer;color:var(--err);margin-left:4px;" data-remove-existing="${idx}">✕</span></span>`);
-  });
-  row.newFiles.forEach((f, idx) => {
-    chips.push(`<span class="chip" data-new-idx="${idx}"><span class="mono">▢</span> ${escapeHtml(f.name)} <span style="cursor:pointer;color:var(--err);margin-left:4px;" data-remove-new="${idx}">✕</span></span>`);
-  });
-  wrap.innerHTML = chips.join('') || '<span class="muted" style="font-size:12px;">未关联文件</span>';
-  wrap.querySelectorAll('[data-remove-existing]').forEach(el => el.addEventListener('click', () => {
+  const rows = [
+    ...row.existingFileIds.map((fid, idx) => existingFileAssetHtml(fid, idx, 'input')),
+    ...row.newFiles.map((f, idx) => newFileAssetHtml(f, idx, 'input')),
+  ];
+  wrap.innerHTML = rows.join('') || '<div class="file-empty-hint">暂无输入文件</div>';
+  wrap.querySelectorAll('[data-remove-existing]').forEach(el => el.addEventListener('click', (event) => {
+    event.stopPropagation();
     row.existingFileIds.splice(Number(el.getAttribute('data-remove-existing')), 1);
     renderCaseCardFiles(row);
+    renderCaseOutline();
   }));
-  wrap.querySelectorAll('[data-remove-new]').forEach(el => el.addEventListener('click', () => {
+  wrap.querySelectorAll('[data-remove-new]').forEach(el => el.addEventListener('click', (event) => {
+    event.stopPropagation();
     row.newFiles.splice(Number(el.getAttribute('data-remove-new')), 1);
     renderCaseCardFiles(row);
+    renderCaseOutline();
   }));
+  renderReferenceSummary(row);
+  bindCaseFileActions(row);
 }
 
 // renderCaseCardBindings 渲染用例卡片里的 MCP/Skill 绑定选择器：
@@ -536,6 +901,9 @@ function addCaseCard(prefill?: CaseItem): void {
     skipHTMLVisualScore: prefill ? !!prefill.skip_html_visual_score : true,
   };
   csEditorRows.push(row);
+  row.renderCheckpointFileHtml = (cp, idx) => renderCheckpointReferenceFiles(row, cp, idx);
+  row.onCheckpointChange = () => { renderReferenceSummary(row); renderCaseOutline(); bindCaseFileActions(row); };
+  row.onCheckpointRender = () => { renderReferenceSummary(row); bindCaseFileActions(row); };
 
   if (prefill) {
     (card.querySelector('.cs-case-name') as HTMLInputElement).value = prefill.name;
@@ -575,9 +943,14 @@ function addCaseCard(prefill?: CaseItem): void {
     renderCaseCardFiles(row);
   });
   (card.querySelector('.cs-add-checkpoint') as HTMLButtonElement).addEventListener('click', () => { addCheckpointFromInput(row); renderCaseOutline(); });
-  (card.querySelector('.cs-checkpoint-input') as HTMLInputElement).addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); addCheckpointFromInput(row); renderCaseOutline(); }
+  (card.querySelector('.cs-checkpoint-input') as HTMLTextAreaElement).addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); addCheckpointFromInput(row); renderCaseOutline(); }
   });
+  card.querySelectorAll<HTMLElement>('[data-case-tab]').forEach(tab => tab.addEventListener('click', () => {
+    const name = tab.getAttribute('data-case-tab');
+    card.querySelectorAll<HTMLElement>('[data-case-tab]').forEach(t => t.classList.toggle('active', t === tab));
+    card.querySelectorAll<HTMLElement>('[data-case-panel]').forEach(panel => panel.classList.toggle('active', panel.getAttribute('data-case-panel') === name));
+  }));
 
   setActiveCase(csEditorRows.length - 1);
 }
@@ -626,7 +999,7 @@ function renumberCaseCards(): void {
 }
 
 
-function openCaseSetModal(existing: CaseSet | null): void {
+async function openCaseSetModal(existing: CaseSet | null): Promise<void> {
   csEditingId = existing ? existing.id : null;
   csEditorRows = [];
   csActiveIndex = 0;
@@ -634,7 +1007,11 @@ function openCaseSetModal(existing: CaseSet | null): void {
   document.getElementById('cs-modal-title')!.textContent = existing ? '编辑用例集' : '新建用例集';
   (document.getElementById('cs-name') as HTMLInputElement).value = existing ? existing.name : '';
   (document.getElementById('cs-desc') as HTMLTextAreaElement).value = existing ? existing.description : '';
-  if (existing && existing.cases && existing.cases.length > 0) {
+  if (existing?.cases?.length) {
+    await loadFileNameMap(existing.cases.flatMap(c => [
+      ...(c.file_ids || []),
+      ...((c.checkpoints || []).flatMap(cp => cp.file_ids || [])),
+    ]));
     existing.cases.forEach(c => addCaseCard(c));
   } else {
     addCaseCard();

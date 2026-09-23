@@ -51,7 +51,7 @@ func (h *CaseSetHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, ErrorResponse{Error: err.Error()})
 		return
 	}
-	cs, err := h.cases.Create(toCaseSetInput(req))
+	cs, err := h.cases.Create(CurrentProjectID(c), toCaseSetInput(req))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, ErrorResponse{Error: err.Error()})
 		return
@@ -60,16 +60,17 @@ func (h *CaseSetHandler) Create(c *gin.Context) {
 }
 
 func (h *CaseSetHandler) List(c *gin.Context) {
-	sets, err := h.cases.List()
+	page, pageSize, q := parseListQuery(c)
+	res, err := h.cases.ListPaged(service.ListCaseSetsOptions{ProjectID: CurrentProjectID(c), Page: page, PageSize: pageSize, Query: q})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, CaseSetListResponse{CaseSets: sets})
+	c.JSON(http.StatusOK, CaseSetListResponse{CaseSets: res.Items, Total: res.Total, Page: res.Page, PageSize: res.PageSize})
 }
 
 func (h *CaseSetHandler) Get(c *gin.Context) {
-	cs, err := h.cases.Get(c.Param("id"))
+	cs, err := h.cases.GetInProject(CurrentProjectID(c), c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusNotFound, ErrorResponse{Error: err.Error()})
 		return
@@ -83,7 +84,7 @@ func (h *CaseSetHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, ErrorResponse{Error: err.Error()})
 		return
 	}
-	cs, err := h.cases.Update(c.Param("id"), toCaseSetInput(req))
+	cs, err := h.cases.Update(CurrentProjectID(c), c.Param("id"), toCaseSetInput(req))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, ErrorResponse{Error: err.Error()})
 		return
@@ -92,7 +93,7 @@ func (h *CaseSetHandler) Update(c *gin.Context) {
 }
 
 func (h *CaseSetHandler) Delete(c *gin.Context) {
-	if err := h.cases.Delete(c.Param("id")); err != nil {
+	if err := h.cases.Delete(CurrentProjectID(c), c.Param("id")); err != nil {
 		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
 		return
 	}

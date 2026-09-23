@@ -10,6 +10,7 @@ import (
 // CaseSet 用例集：一组用例的容器。
 type CaseSet struct {
 	ID          string         `gorm:"primaryKey;size:64" json:"id"`
+	ProjectID   string         `gorm:"index;size:64" json:"project_id"`
 	Name        string         `gorm:"size:128" json:"name"`
 	Description string         `gorm:"type:text" json:"description"`
 	Version     int            `json:"version"`

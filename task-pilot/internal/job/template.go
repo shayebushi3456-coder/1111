@@ -28,7 +28,9 @@ func Build(task *model.Task, cfg config.KubernetesConfig, ft config.FileTransfer
 	// subdirectory inside that private volume.
 	taskWorkspace := path.Join(ft.WorkspaceMountPath, "tasks", task.ID)
 
-	script := buildScript(task.Command, model.DecodeInputFiles(task.InputFilesJSON), ft.ServiceBaseURL)
+	inputFiles := model.DecodeInputFiles(task.InputFilesJSON)
+	prestartFile, inputFiles := splitPrestartInput(inputFiles)
+	script := buildScript(task.Command, inputFiles, ft.ServiceBaseURL, prestartFile != nil)
 
 	env := []corev1.EnvVar{
 		{Name: "TASK_ID", Value: task.ID},
@@ -107,6 +109,10 @@ func Build(task *model.Task, cfg config.KubernetesConfig, ft config.FileTransfer
 			env = append(env, corev1.EnvVar{Name: k, Value: extra[k]})
 		}
 	}
+	// Mock HTTP sidecar（前置脚本）默认监听 8000；注入给 executor，Agent/工具可直接调本机接口。
+	if prestartFile != nil && prestartFile.FileID != "" {
+		env = append(env, corev1.EnvVar{Name: "MOCK_API_BASE_URL", Value: MockAPIBaseURL})
+	}
 
 	// Claude Code's --dangerously-skip-permissions refuses to run as root (UID 0).
 	// When cfg.ExecutorRunAsUser is configured (>0), force the executor container
@@ -155,7 +161,7 @@ func Build(task *model.Task, cfg config.KubernetesConfig, ft config.FileTransfer
 				cfg.ExecutorPlaywrightBrowsersPath, stagedPlaywrightBrowsersPath, stagedPlaywrightBrowsersPath,
 			)
 		}
-		initContainers = []corev1.Container{{
+		initContainers = append(initContainers, corev1.Container{
 			Name:            "workspace-init",
 			Image:           task.Image,
 			ImagePullPolicy: corev1.PullIfNotPresent,
@@ -170,7 +176,40 @@ func Build(task *model.Task, cfg config.KubernetesConfig, ft config.FileTransfer
 			// Explicitly root: this container's only job is to prepare permissions
 			// for the non-root executor container that runs after it.
 			SecurityContext: &corev1.SecurityContext{RunAsUser: int64Ptr(0)},
-		}}
+		})
+	}
+
+	volumeMounts := []corev1.VolumeMount{{
+		Name:      "task-files",
+		MountPath: ft.WorkspaceMountPath,
+	}}
+	containers := []corev1.Container{{
+		Name:            "executor",
+		Image:           task.Image,
+		ImagePullPolicy: corev1.PullIfNotPresent,
+		WorkingDir:      taskWorkspace,
+		Command:         []string{"sh", "-c"},
+		Args:            []string{script},
+		Env:             env,
+		SecurityContext: containerSecurityContext,
+		VolumeMounts:    volumeMounts,
+	}}
+
+	// 前置脚本 sidecar：与 executor 同 Pod、共享 localhost。
+	// 适合 serve_forever 的 Mock HTTP；executor 结束时写 .executor-done，sidecar 收到后退出，
+	// 避免多容器 Job 因 sidecar 不退出而永远挂起（不依赖 K8s native sidecar 特性）。
+	if prestartFile != nil && prestartFile.FileID != "" {
+		containers = append(containers, corev1.Container{
+			Name:            "prestart-script",
+			Image:           task.Image,
+			ImagePullPolicy: corev1.PullIfNotPresent,
+			WorkingDir:      taskWorkspace,
+			Command:         []string{"sh", "-c"},
+			Args:            []string{buildPrestartSidecarScript(*prestartFile, ft.ServiceBaseURL)},
+			Env:             env,
+			SecurityContext: containerSecurityContext,
+			VolumeMounts:    volumeMounts,
+		})
 	}
 
 	return &batchv1.Job{
@@ -200,22 +239,7 @@ func Build(task *model.Task, cfg config.KubernetesConfig, ft config.FileTransfer
 					ServiceAccountName: cfg.ServiceAccount,
 					SecurityContext:    podSecurityContext,
 					InitContainers:     initContainers,
-					Containers: []corev1.Container{{
-						Name:            "executor",
-						Image:           task.Image,
-						ImagePullPolicy: corev1.PullIfNotPresent,
-						WorkingDir:      taskWorkspace,
-						Command:         []string{"sh", "-c"},
-						Args:            []string{script},
-						Env:             env,
-						SecurityContext: containerSecurityContext,
-						VolumeMounts: []corev1.VolumeMount{
-							{
-								Name:      "task-files",
-								MountPath: ft.WorkspaceMountPath,
-							},
-						},
-					}},
+					Containers:         containers,
 					Volumes: []corev1.Volume{{
 						Name: "task-files",
 						VolumeSource: corev1.VolumeSource{
@@ -228,7 +252,7 @@ func Build(task *model.Task, cfg config.KubernetesConfig, ft config.FileTransfer
 	}
 }
 
-func buildScript(userCommand string, inputFiles []model.InputFileSpec, serviceBaseURL string) string {
+func buildScript(userCommand string, inputFiles []model.InputFileSpec, serviceBaseURL string, waitForMock bool) string {
 	var b strings.Builder
 
 	b.WriteString(`set -e
@@ -240,6 +264,27 @@ mkdir -p "$WORKSPACE/input" "$WORKSPACE/output" "$WORKSPACE/tmp"
 # $HOME/.claude) have a writable home directory regardless of the image's /etc/passwd.
 [ -n "${HOME:-}" ] && mkdir -p "$HOME"
 `)
+
+	if waitForMock {
+		// sidecar 与 executor 并行启动；等 Mock /health 通再跑测评，避免竞态。
+		b.WriteString(`
+MOCK_URL="${MOCK_API_BASE_URL:-http://127.0.0.1:8000}"
+echo "waiting for mock API at $MOCK_URL/health ..."
+i=0
+while [ "$i" -lt 90 ]; do
+  if curl -fsS "$MOCK_URL/health" >/dev/null 2>&1; then
+    echo "mock API ready"
+    break
+  fi
+  i=$((i + 1))
+  if [ "$i" -ge 90 ]; then
+    echo "mock API not ready after 90s" >&2
+    exit 1
+  fi
+  sleep 1
+done
+`)
+	}
 
 	for _, input := range inputFiles {
 		if input.FileID == "" {
@@ -308,6 +353,8 @@ if [ -d "$WORKSPACE/output" ]; then
     curl -fsS -H "X-Task-Token: $TASK_TOKEN" -F "file=@$WORKSPACE/tmp/output.tar.gz" "%s/api/v1/tasks/$TASK_ID/artifacts"
   fi
 fi
+# 通知 prestart sidecar 可以退出（同 Pod 多容器 Job 要求全部容器结束）。
+touch "$WORKSPACE/tmp/.executor-done" 2>/dev/null || true
 exit "$TASK_EXIT_CODE"
 `, strings.TrimRight(serviceBaseURL, "/")))
 
@@ -320,4 +367,64 @@ func shellDoubleQuoteInner(value string) string {
 	value = strings.ReplaceAll(value, `$`, `\$`)
 	value = strings.ReplaceAll(value, "`", "\\`")
 	return value
+}
+
+// PrestartInputFilename 前置脚本在 input/ 下的固定文件名；派发侧写入，Build 侧识别并挂 sidecar。
+const PrestartInputFilename = "__prestart__.py"
+
+// MockAPIBaseURL 同 Pod sidecar Mock HTTP 的默认地址（脚本默认 --port 8000）。
+const MockAPIBaseURL = "http://127.0.0.1:8000"
+
+// splitPrestartInput 把前置脚本从普通输入文件中拆出，供 sidecar 单独下载执行。
+func splitPrestartInput(files []model.InputFileSpec) (*model.InputFileSpec, []model.InputFileSpec) {
+	var prestart *model.InputFileSpec
+	rest := make([]model.InputFileSpec, 0, len(files))
+	for i := range files {
+		f := files[i]
+		name := f.Filename
+		if name == "" && f.MountPath != "" {
+			name = filepath.Base(f.MountPath)
+		}
+		if filepath.Base(name) == PrestartInputFilename && f.FileID != "" {
+			cp := f
+			cp.Filename = PrestartInputFilename
+			prestart = &cp
+			continue
+		}
+		rest = append(rest, f)
+	}
+	return prestart, rest
+}
+
+// buildPrestartSidecarScript 下载 .py 后后台启动（可 serve_forever），等 executor 写 .executor-done 再退出。
+func buildPrestartSidecarScript(file model.InputFileSpec, serviceBaseURL string) string {
+	url := fmt.Sprintf(
+		"\"%s/api/v1/files/%s/download?task_id=$TASK_ID\"",
+		strings.TrimRight(serviceBaseURL, "/"),
+		file.FileID,
+	)
+	target := "\"$WORKSPACE/input/" + shellDoubleQuoteInner(PrestartInputFilename) + "\""
+	var b strings.Builder
+	b.WriteString("set -e\n")
+	b.WriteString("mkdir -p \"$WORKSPACE/input\" \"$WORKSPACE/output\" \"$WORKSPACE/tmp\"\n")
+	b.WriteString("[ -n \"${HOME:-}\" ] && mkdir -p \"$HOME\"\n")
+	b.WriteString("rm -f \"$WORKSPACE/tmp/.executor-done\"\n")
+	b.WriteString(fmt.Sprintf("curl -fsSL -H \"X-Task-Token: $TASK_TOKEN\" %s -o %s\n", url, target))
+	b.WriteString("cd \"$WORKSPACE\"\n")
+	b.WriteString("python3 \"input/" + PrestartInputFilename + "\" &\n")
+	b.WriteString("MOCK_PID=$!\n")
+	b.WriteString(`
+# 等主容器结束信号；主容器结束后 sidecar 必须退出，否则 Job 不会完成。
+while kill -0 "$MOCK_PID" 2>/dev/null; do
+  if [ -f "$WORKSPACE/tmp/.executor-done" ]; then
+    kill "$MOCK_PID" 2>/dev/null || true
+    wait "$MOCK_PID" 2>/dev/null || true
+    exit 0
+  fi
+  sleep 1
+done
+wait "$MOCK_PID"
+exit $?
+`)
+	return b.String()
 }

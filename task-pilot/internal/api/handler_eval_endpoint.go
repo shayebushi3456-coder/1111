@@ -29,7 +29,7 @@ func (h *EvalEndpointHandler) toResponse(ep *model.EvalEndpoint) EndpointRespons
 }
 
 func (h *EvalEndpointHandler) List(c *gin.Context) {
-	eps, err := h.svc.ListEndpoints()
+	eps, err := h.svc.ListEndpoints(CurrentProjectID(c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
 		return
@@ -42,7 +42,7 @@ func (h *EvalEndpointHandler) List(c *gin.Context) {
 }
 
 func (h *EvalEndpointHandler) Get(c *gin.Context) {
-	ep, err := h.svc.GetEndpoint(c.Param("id"))
+	ep, err := h.svc.GetEndpointInProject(CurrentProjectID(c), c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusNotFound, ErrorResponse{Error: err.Error()})
 		return
@@ -56,7 +56,7 @@ func (h *EvalEndpointHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, ErrorResponse{Error: err.Error()})
 		return
 	}
-	ep, err := h.svc.CreateEndpoint(service.UpsertEndpointInput{
+	ep, err := h.svc.CreateEndpoint(CurrentProjectID(c), service.UpsertEndpointInput{
 		Name:      req.Name,
 		BaseURL:   req.BaseURL,
 		ModelName: req.ModelName,
@@ -76,7 +76,7 @@ func (h *EvalEndpointHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, ErrorResponse{Error: err.Error()})
 		return
 	}
-	ep, err := h.svc.UpdateEndpoint(c.Param("id"), service.UpsertEndpointInput{
+	ep, err := h.svc.UpdateEndpoint(CurrentProjectID(c), c.Param("id"), service.UpsertEndpointInput{
 		Name:      req.Name,
 		BaseURL:   req.BaseURL,
 		ModelName: req.ModelName,
@@ -91,7 +91,7 @@ func (h *EvalEndpointHandler) Update(c *gin.Context) {
 }
 
 func (h *EvalEndpointHandler) Delete(c *gin.Context) {
-	if err := h.svc.DeleteEndpoint(c.Param("id")); err != nil {
+	if err := h.svc.DeleteEndpoint(CurrentProjectID(c), c.Param("id")); err != nil {
 		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
 		return
 	}

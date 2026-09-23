@@ -10,7 +10,8 @@ import (
 // APIKeyEnc 存储加密后的 api_key，读取时脱敏，绝不明文出接口。
 type EvalEndpoint struct {
 	ID        string         `gorm:"primaryKey;size:64" json:"id"`
-	Name      string         `gorm:"uniqueIndex;size:128" json:"name"`
+	ProjectID string         `gorm:"index;size:64" json:"project_id"`
+	Name      string         `gorm:"size:128" json:"name"`
 	BaseURL   string         `gorm:"size:512" json:"base_url"`
 	ModelName string         `gorm:"size:128" json:"model_name"`
 	APIKeyEnc string         `gorm:"type:text" json:"-"`

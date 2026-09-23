@@ -41,6 +41,9 @@ func TestBuildTestCommand(t *testing.T) {
 			t.Errorf("command should preserve and print failed trace: missing %q", want)
 		}
 	}
+	if strings.Contains(cmd, "python3 ") {
+		t.Error("prestart must not run inside executor command; it belongs in sidecar")
+	}
 }
 
 func TestBuildTestCommandInjectionSafe(t *testing.T) {

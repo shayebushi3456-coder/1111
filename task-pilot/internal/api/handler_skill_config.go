@@ -33,7 +33,7 @@ func (h *SkillConfigHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, ErrorResponse{Error: err.Error()})
 		return
 	}
-	sk, err := h.skills.Create(service.UpsertSkillConfigInput{
+	sk, err := h.skills.Create(CurrentProjectID(c), service.UpsertSkillConfigInput{
 		Name:        req.Name,
 		Description: req.Description,
 		ContentMD:   req.ContentMD,
@@ -47,7 +47,7 @@ func (h *SkillConfigHandler) Create(c *gin.Context) {
 }
 
 func (h *SkillConfigHandler) List(c *gin.Context) {
-	items, err := h.skills.List()
+	items, err := h.skills.List(CurrentProjectID(c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
 		return
@@ -60,7 +60,7 @@ func (h *SkillConfigHandler) List(c *gin.Context) {
 }
 
 func (h *SkillConfigHandler) Get(c *gin.Context) {
-	sk, err := h.skills.Get(c.Param("id"))
+	sk, err := h.skills.GetInProject(CurrentProjectID(c), c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusNotFound, ErrorResponse{Error: err.Error()})
 		return
@@ -74,7 +74,7 @@ func (h *SkillConfigHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, ErrorResponse{Error: err.Error()})
 		return
 	}
-	sk, err := h.skills.Update(c.Param("id"), service.UpsertSkillConfigInput{
+	sk, err := h.skills.Update(CurrentProjectID(c), c.Param("id"), service.UpsertSkillConfigInput{
 		Name:        req.Name,
 		Description: req.Description,
 		ContentMD:   req.ContentMD,
@@ -88,7 +88,7 @@ func (h *SkillConfigHandler) Update(c *gin.Context) {
 }
 
 func (h *SkillConfigHandler) Delete(c *gin.Context) {
-	if err := h.skills.Delete(c.Param("id")); err != nil {
+	if err := h.skills.Delete(CurrentProjectID(c), c.Param("id")); err != nil {
 		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
 		return
 	}

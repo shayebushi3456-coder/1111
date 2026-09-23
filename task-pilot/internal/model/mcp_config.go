@@ -12,7 +12,8 @@ import (
 // 内容原样落库，不做结构校验（不同 MCP server 的字段差异很大），仅要求是合法 JSON 对象。
 type MCPConfig struct {
 	ID          string         `gorm:"primaryKey;size:64" json:"id"`
-	Name        string         `gorm:"uniqueIndex;size:128" json:"name"`
+	ProjectID   string         `gorm:"index;size:64" json:"project_id"`
+	Name        string         `gorm:"size:128" json:"name"`
 	Description string         `gorm:"type:text" json:"description"`
 	ConfigJSON  string         `gorm:"type:text" json:"config_json"`
 	CreatedAt   time.Time      `json:"created_at"`

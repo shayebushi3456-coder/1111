@@ -12,10 +12,13 @@ import (
 	"task-pilot/internal/config"
 	"task-pilot/internal/eval"
 	"task-pilot/internal/filetransfer"
+	jobbackend "task-pilot/internal/job"
 	"task-pilot/internal/model"
 	"task-pilot/internal/util"
 	"gorm.io/gorm"
 )
+
+const defaultMaxEvalAttempts = 3
 
 // EvalService 执行任务（EvalRun）编排：二段式执行——先派发 TestTask（被测），
 // 测试成功后派发 EvalTask（评测 LLM），产出 Markdown 分析报告供人工审阅。
@@ -28,16 +31,41 @@ type EvalService struct {
 	evalEndpoint *EvalEndpointService
 	files        *filetransfer.Service
 	prompts      *PromptService
-	mcpConfigs   *MCPConfigService
-	skillConfigs *SkillConfigService
+	mcpConfigs     *MCPConfigService
+	skillConfigs   *SkillConfigService
+	runtimeEnvCfgs *RuntimeEnvConfigService
 }
 
-func NewEvalService(db *gorm.DB, cfg *config.Config, tasks *TaskService, caseSet *CaseSetService, configS *ConfigService, evalEndpoint *EvalEndpointService, files *filetransfer.Service, prompts *PromptService, mcpConfigs *MCPConfigService, skillConfigs *SkillConfigService) *EvalService {
-	return &EvalService{db: db, cfg: cfg, tasks: tasks, caseSet: caseSet, configS: configS, evalEndpoint: evalEndpoint, files: files, prompts: prompts, mcpConfigs: mcpConfigs, skillConfigs: skillConfigs}
+func NewEvalService(db *gorm.DB, cfg *config.Config, tasks *TaskService, caseSet *CaseSetService, configS *ConfigService, evalEndpoint *EvalEndpointService, files *filetransfer.Service, prompts *PromptService, mcpConfigs *MCPConfigService, skillConfigs *SkillConfigService, runtimeEnvCfgs *RuntimeEnvConfigService) *EvalService {
+	return &EvalService{db: db, cfg: cfg, tasks: tasks, caseSet: caseSet, configS: configS, evalEndpoint: evalEndpoint, files: files, prompts: prompts, mcpConfigs: mcpConfigs, skillConfigs: skillConfigs, runtimeEnvCfgs: runtimeEnvCfgs}
+}
+
+func (s *EvalService) withRuntimeEnv(projectID string, stageEnv map[string]string) (map[string]string, error) {
+	out := make(map[string]string, len(stageEnv))
+	for k, v := range stageEnv {
+		out[k] = v
+	}
+	if s.runtimeEnvCfgs == nil {
+		return out, nil
+	}
+	runtimeEnv, err := s.runtimeEnvCfgs.EnabledEnv(projectID)
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range runtimeEnv {
+		// 阶段内置变量（TARGET_ / EVAL_ / TASK_ / WORKSPACE 等）优先，避免用户配置覆盖系统运行所需变量。
+		if _, exists := out[k]; exists {
+			continue
+		}
+		out[k] = v
+	}
+	return out, nil
 }
 
 // CreateEvalRunInput 创建执行任务输入。
 type CreateEvalRunInput struct {
+	// ProjectID 归属项目；创建的 EvalRun 及其引用的用例集/端点/prompt 均须归属该项目。
+	ProjectID  string
 	CaseSetID  string
 	Name       string
 	EndpointID string
@@ -50,12 +78,19 @@ type CreateEvalRunInput struct {
 	TestImage string
 	// EvalImage 覆盖评测任务镜像；空时回退 Builtin.EvalExecutorImage。
 	EvalImage string
+	// TestTimeoutSeconds / EvalTimeoutSeconds 分别覆盖测试/评测任务超时时间；<=0 时使用内置默认。
+	TestTimeoutSeconds int64
+	EvalTimeoutSeconds int64
+	// MaxEvalAttempts EvalTask 最大尝试次数；<=0 时使用 defaultMaxEvalAttempts。
+	MaxEvalAttempts int
 	// TestModelCommand 覆盖测试任务模型启动命令片段（例如 "ccr code -p"）；
 	// 空时回退 Builtin.DefaultTestModelCommand。
 	TestModelCommand string
 	// EvalModelCommand 覆盖评测任务模型启动命令片段（例如 "claude -p"）；
 	// 空时回退 Builtin.DefaultEvalModelCommand。
 	EvalModelCommand string
+	// PrestartScriptFileID 测试前置 .py；空表示不执行。
+	PrestartScriptFileID string
 }
 
 // shellSingleQuote 用单引号安全包裹字符串，防止命令注入。
@@ -92,6 +127,27 @@ func resolveEvalImage(run *model.EvalRun) string {
 		return run.EvalImage
 	}
 	return config.Builtin.EvalExecutorImage
+}
+
+func resolveTestTimeout(run *model.EvalRun) int64 {
+	if run != nil && run.TestTimeoutSeconds > 0 {
+		return run.TestTimeoutSeconds
+	}
+	return config.Builtin.TestTimeoutSeconds
+}
+
+func resolveEvalTimeout(run *model.EvalRun) int64 {
+	if run != nil && run.EvalTimeoutSeconds > 0 {
+		return run.EvalTimeoutSeconds
+	}
+	return config.Builtin.EvalTimeoutSeconds
+}
+
+func resolveMaxEvalAttempts(run *model.EvalRun) int {
+	if run != nil && run.MaxEvalAttempts > 0 {
+		return run.MaxEvalAttempts
+	}
+	return defaultMaxEvalAttempts
 }
 
 // resolveEvalModelCommand 决定评测任务的模型启动命令：
@@ -252,7 +308,7 @@ func (s *EvalService) CreateEvalRun(ctx context.Context, in CreateEvalRunInput) 
 	if in.CaseSetID == "" {
 		return nil, fmt.Errorf("case_set_id is required")
 	}
-	cs, err := s.caseSet.Get(in.CaseSetID)
+	cs, err := s.caseSet.GetInProject(in.ProjectID, in.CaseSetID)
 	if err != nil {
 		return nil, fmt.Errorf("load case set: %w", err)
 	}
@@ -263,9 +319,9 @@ func (s *EvalService) CreateEvalRun(ctx context.Context, in CreateEvalRunInput) 
 	// 解析被测端点（仅校验存在性；api_key 在派发时才解密），并记录 endpoint_id。
 	var endpoint *model.TargetEndpoint
 	if in.EndpointID != "" {
-		endpoint, err = s.configS.GetEndpoint(in.EndpointID)
+		endpoint, err = s.configS.GetEndpointInProject(in.ProjectID, in.EndpointID)
 	} else {
-		endpoint, err = s.configS.DefaultEndpoint()
+		endpoint, err = s.configS.DefaultEndpoint(in.ProjectID)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("resolve target endpoint: %w", err)
@@ -274,9 +330,9 @@ func (s *EvalService) CreateEvalRun(ctx context.Context, in CreateEvalRunInput) 
 	// 解析评测端点（指定优先，否则默认），并记录 eval_endpoint_id；api_key 在派发时才解密。
 	var evalEndpoint *model.EvalEndpoint
 	if in.EvalEndpointID != "" {
-		evalEndpoint, err = s.evalEndpoint.GetEndpoint(in.EvalEndpointID)
+		evalEndpoint, err = s.evalEndpoint.GetEndpointInProject(in.ProjectID, in.EvalEndpointID)
 	} else {
-		evalEndpoint, err = s.evalEndpoint.DefaultEndpoint()
+		evalEndpoint, err = s.evalEndpoint.DefaultEndpoint(in.ProjectID)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("resolve eval endpoint: %w", err)
@@ -285,12 +341,26 @@ func (s *EvalService) CreateEvalRun(ctx context.Context, in CreateEvalRunInput) 
 	// 解析评测 prompt（指定优先，否则默认），并将其内容快照到本次 run，保证可复现。
 	var prompt *model.EvalPrompt
 	if in.PromptID != "" {
-		prompt, err = s.prompts.Get(in.PromptID)
+		prompt, err = s.prompts.GetInProject(in.ProjectID, in.PromptID)
 	} else {
-		prompt, err = s.prompts.Default()
+		prompt, err = s.prompts.Default(in.ProjectID)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("resolve eval prompt: %w", err)
+	}
+
+	prestartFileID := strings.TrimSpace(in.PrestartScriptFileID)
+	if prestartFileID != "" {
+		fo, err := s.files.Get(prestartFileID)
+		if err != nil {
+			return nil, fmt.Errorf("resolve prestart script: %w", err)
+		}
+		if fo.Purpose != model.FilePurposePrestart {
+			return nil, fmt.Errorf("file is not a prestart script")
+		}
+		if fo.ProjectID != in.ProjectID {
+			return nil, fmt.Errorf("prestart script must belong to this project")
+		}
 	}
 
 	snapshot := buildSnapshot(cs)
@@ -306,6 +376,7 @@ func (s *EvalService) CreateEvalRun(ctx context.Context, in CreateEvalRunInput) 
 	runID := util.NewID("er")
 	run := &model.EvalRun{
 		ID:             runID,
+		ProjectID:      in.ProjectID,
 		Name:           name,
 		CaseSetID:      cs.ID,
 		EndpointID:     endpoint.ID,
@@ -316,10 +387,14 @@ func (s *EvalService) CreateEvalRun(ctx context.Context, in CreateEvalRunInput) 
 		Status:         model.EvalRunRunning,
 		Total:          len(cs.Cases),
 		MaxConcurrent:  maxConcurrent,
-		TestImage:        strings.TrimSpace(in.TestImage),
-		EvalImage:        strings.TrimSpace(in.EvalImage),
-		TestModelCommand: strings.TrimSpace(in.TestModelCommand),
+		TestImage:          strings.TrimSpace(in.TestImage),
+		EvalImage:          strings.TrimSpace(in.EvalImage),
+		TestTimeoutSeconds: in.TestTimeoutSeconds,
+		EvalTimeoutSeconds: in.EvalTimeoutSeconds,
+		MaxEvalAttempts:    in.MaxEvalAttempts,
+		TestModelCommand:   strings.TrimSpace(in.TestModelCommand),
 		EvalModelCommand: strings.TrimSpace(in.EvalModelCommand),
+		PrestartScriptFileID: prestartFileID,
 		// ScorePromptVersion 冻结创建时的机评量化脚本版本，保证历史 run 的语义不随后续
 		// 版本升级而改变（与 PromptSnapshot/SnapshotJSON 的“创建时冻结”原则一致）。
 		ScorePromptVersion: eval.CurrentScorePromptVersion,
@@ -398,6 +473,28 @@ func (s *EvalService) resolveCheckpointInputs(checkpoints []model.EvalRunSnapsho
 	return evalCheckpoints, specs
 }
 
+func snapshotCaseFromCase(c model.Case) model.EvalRunSnapshotCase {
+	cps := make([]model.EvalRunSnapshotCheckpoint, 0, len(c.Checkpoints))
+	for _, cp := range c.Checkpoints {
+		cps = append(cps, model.EvalRunSnapshotCheckpoint{
+			Description: cp.Description,
+			FileIDs:     cp.FileIDs,
+		})
+	}
+	return model.EvalRunSnapshotCase{
+		CaseID:                c.ID,
+		Name:                  c.Name,
+		Description:           c.Description,
+		FileIDs:               c.FileIDs,
+		Checkpoints:           cps,
+		MCPIDs:                c.MCPIDs,
+		SkillIDs:              c.SkillIDs,
+		EnablePPTVisualScore:  c.EnablePPTVisualScore,
+		EnableHTMLVisualScore: c.EnableHTMLVisualScore,
+		SkipHTMLVisualScore:   c.SkipHTMLVisualScore,
+	}
+}
+
 func buildSnapshot(cs *model.CaseSet) model.EvalRunSnapshot {
 	snap := model.EvalRunSnapshot{
 		CaseSetID:   cs.ID,
@@ -405,30 +502,24 @@ func buildSnapshot(cs *model.CaseSet) model.EvalRunSnapshot {
 		Version:     cs.Version,
 	}
 	for _, c := range cs.Cases {
-		cps := make([]model.EvalRunSnapshotCheckpoint, 0, len(c.Checkpoints))
-		for _, cp := range c.Checkpoints {
-			cps = append(cps, model.EvalRunSnapshotCheckpoint{
-				Description: cp.Description,
-				FileIDs:     cp.FileIDs,
-			})
-		}
-		snap.Cases = append(snap.Cases, model.EvalRunSnapshotCase{
-			CaseID:                c.ID,
-			Name:                  c.Name,
-			Description:           c.Description,
-			FileIDs:               c.FileIDs,
-			Checkpoints:           cps,
-			MCPIDs:                c.MCPIDs,
-			SkillIDs:              c.SkillIDs,
-			EnablePPTVisualScore:  c.EnablePPTVisualScore,
-			EnableHTMLVisualScore: c.EnableHTMLVisualScore,
-			SkipHTMLVisualScore:   c.SkipHTMLVisualScore,
-		})
+		snap.Cases = append(snap.Cases, snapshotCaseFromCase(c))
 	}
 	return snap
 }
 
-// GetEvalRun 查询执行任务（含各用例执行状态）。
+// refreshSnapshotCase 用当前用例内容覆盖快照中同 CaseID 的条目；找不到返回 ok=false。
+func refreshSnapshotCase(snap model.EvalRunSnapshot, c model.Case) (model.EvalRunSnapshot, bool) {
+	updated := snapshotCaseFromCase(c)
+	for i := range snap.Cases {
+		if snap.Cases[i].CaseID == c.ID {
+			snap.Cases[i] = updated
+			return snap, true
+		}
+	}
+	return snap, false
+}
+
+// GetEvalRun 查询执行任务（含各用例执行状态），不做项目归属校验，供调度器等内部代码使用。
 func (s *EvalService) GetEvalRun(id string) (*model.EvalRun, error) {
 	var run model.EvalRun
 	err := s.db.Preload("CaseExecutions", func(db *gorm.DB) *gorm.DB {
@@ -440,13 +531,66 @@ func (s *EvalService) GetEvalRun(id string) (*model.EvalRun, error) {
 	return &run, nil
 }
 
-// ListEvalRuns 列出执行任务（不含用例明细）。
-func (s *EvalService) ListEvalRuns() ([]model.EvalRun, error) {
-	var runs []model.EvalRun
-	if err := s.db.Order("created_at desc").Limit(100).Find(&runs).Error; err != nil {
+// GetEvalRunInProject 按 ID+projectID 查询，供 API 边界使用，防止跨项目通过 ID 越权访问。
+func (s *EvalService) GetEvalRunInProject(projectID, id string) (*model.EvalRun, error) {
+	run, err := s.GetEvalRun(id)
+	if err != nil {
 		return nil, err
 	}
-	return runs, nil
+	if run.ProjectID != projectID {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return run, nil
+}
+
+type ListEvalRunsOptions struct {
+	ProjectID string
+	Page      int
+	PageSize  int
+	Query     string
+}
+
+type ListEvalRunsResult struct {
+	Items    []model.EvalRun
+	Total    int64
+	Page     int
+	PageSize int
+}
+
+// ListEvalRuns 列出执行任务（不含用例明细）。
+func (s *EvalService) ListEvalRuns(projectID string) ([]model.EvalRun, error) {
+	res, err := s.ListEvalRunsPaged(ListEvalRunsOptions{ProjectID: projectID, Page: 1, PageSize: 100})
+	if err != nil {
+		return nil, err
+	}
+	return res.Items, nil
+}
+
+func (s *EvalService) ListEvalRunsPaged(opts ListEvalRunsOptions) (ListEvalRunsResult, error) {
+	if opts.Page <= 0 {
+		opts.Page = 1
+	}
+	if opts.PageSize <= 0 {
+		opts.PageSize = 20
+	}
+	if opts.PageSize > 100 {
+		opts.PageSize = 100
+	}
+	q := strings.TrimSpace(opts.Query)
+	db := s.db.Model(&model.EvalRun{}).Where("project_id = ?", opts.ProjectID)
+	if q != "" {
+		like := "%" + q + "%"
+		db = db.Where("name LIKE ? OR id LIKE ? OR case_set_id LIKE ?", like, like, like)
+	}
+	var total int64
+	if err := db.Count(&total).Error; err != nil {
+		return ListEvalRunsResult{}, err
+	}
+	var runs []model.EvalRun
+	if err := db.Order("created_at desc").Limit(opts.PageSize).Offset((opts.Page - 1) * opts.PageSize).Find(&runs).Error; err != nil {
+		return ListEvalRunsResult{}, err
+	}
+	return ListEvalRunsResult{Items: runs, Total: total, Page: opts.Page, PageSize: opts.PageSize}, nil
 }
 
 // ListRunningCaseExecutions 跨所有 EvalRun 返回当前正在执行的用例（测试或评测阶段），
@@ -466,8 +610,8 @@ func (s *EvalService) ListRunningCaseExecutions() ([]model.CaseExecution, error)
 }
 
 // StopEvalRun 停止执行任务：删除未终态用例的 TestTask Job，置为 STOPPED。
-func (s *EvalService) StopEvalRun(ctx context.Context, id string) (*model.EvalRun, error) {
-	run, err := s.GetEvalRun(id)
+func (s *EvalService) StopEvalRun(ctx context.Context, projectID, id string) (*model.EvalRun, error) {
+	run, err := s.GetEvalRunInProject(projectID, id)
 	if err != nil {
 		return nil, err
 	}
@@ -481,7 +625,7 @@ func (s *EvalService) StopEvalRun(ctx context.Context, id string) (*model.EvalRu
 			if taskID == "" {
 				continue
 			}
-			if _, err := s.tasks.CancelTask(ctx, taskID); err != nil {
+			if _, err := s.tasks.CancelTask(ctx, projectID, taskID); err != nil {
 				s.db.Model(&ce).Update("message", err.Error())
 			}
 		}
@@ -490,17 +634,112 @@ func (s *EvalService) StopEvalRun(ctx context.Context, id string) (*model.EvalRu
 	}
 	now := time.Now()
 	s.db.Model(run).Updates(map[string]any{"status": model.EvalRunStopped, "finished_at": &now})
-	return s.GetEvalRun(id)
+	return s.GetEvalRunInProject(projectID, id)
+}
+
+// ReEvalCaseExecution 对单条已跑完测试的用例重新派发评测：不重跑 TestTask，
+// 复用其产物/日志，并刷新快照中的题面/校验点与当前 Judge Prompt，再置为 TEST_DONE 排队。
+func (s *EvalService) ReEvalCaseExecution(ctx context.Context, projectID, runID, ceID string) (*model.EvalRun, error) {
+	run, err := s.GetEvalRunInProject(projectID, runID)
+	if err != nil {
+		return nil, err
+	}
+	var ce *model.CaseExecution
+	for i := range run.CaseExecutions {
+		if run.CaseExecutions[i].ID == ceID {
+			ce = &run.CaseExecutions[i]
+			break
+		}
+	}
+	if ce == nil {
+		return nil, fmt.Errorf("case execution not found")
+	}
+	switch ce.Status {
+	case model.CaseExecReported, model.CaseExecError, model.CaseExecStopped, model.CaseExecTestDone:
+		// ok
+	default:
+		return nil, fmt.Errorf("case execution status %s cannot re-eval (need reported/error/stopped/test_done)", ce.Status)
+	}
+	if ce.TestTaskID == "" {
+		return nil, fmt.Errorf("no test task; cannot re-eval without test artifacts")
+	}
+	testTask, err := s.tasks.GetTask(ce.TestTaskID)
+	if err != nil {
+		return nil, fmt.Errorf("load test task: %w", err)
+	}
+	if testTask.Status != model.TaskStatusSucceeded {
+		return nil, fmt.Errorf("test task status %s; re-eval requires a succeeded test", testTask.Status)
+	}
+
+	cs, err := s.caseSet.GetInProject(projectID, run.CaseSetID)
+	if err != nil {
+		return nil, fmt.Errorf("load case set: %w", err)
+	}
+	var liveCase *model.Case
+	for i := range cs.Cases {
+		if cs.Cases[i].ID == ce.CaseID {
+			liveCase = &cs.Cases[i]
+			break
+		}
+	}
+	if liveCase == nil {
+		return nil, fmt.Errorf("case %s no longer in case set; cannot refresh snapshot", ce.CaseID)
+	}
+
+	snap := model.DecodeSnapshot(run.SnapshotJSON)
+	snap.CaseSetName = cs.Name
+	snap.Version = cs.Version
+	snap, ok := refreshSnapshotCase(snap, *liveCase)
+	if !ok {
+		return nil, fmt.Errorf("case %s missing from eval-run snapshot", ce.CaseID)
+	}
+
+	promptContent := run.PromptSnapshot
+	if run.PromptID != "" {
+		if p, err := s.prompts.GetInProject(projectID, run.PromptID); err == nil {
+			promptContent = p.Content
+		}
+	} else if p, err := s.prompts.Default(projectID); err == nil {
+		promptContent = p.Content
+	}
+
+	if err := s.db.Model(ce).Updates(map[string]any{
+		"case_name":       liveCase.Name,
+		"status":          model.CaseExecTestDone,
+		"eval_task_id":    "",
+		"eval_attempts":   0,
+		"report":          "",
+		"message":         "queued for re-eval",
+		"score":           nil,
+		"issue_tags_json": "",
+		"score_status":    "",
+		"score_error":     "",
+		"score_reason":    "",
+		"exit_code":       nil,
+		"finished_at":     nil,
+	}).Error; err != nil {
+		return nil, err
+	}
+	if err := s.db.Model(run).Updates(map[string]any{
+		"status":          model.EvalRunRunning,
+		"finished_at":     nil,
+		"snapshot_json":   model.EncodeSnapshot(snap),
+		"prompt_snapshot": promptContent,
+	}).Error; err != nil {
+		return nil, err
+	}
+	s.aggregate(run.ID)
+	return s.GetEvalRunInProject(projectID, runID)
 }
 
 // DeleteEvalRun 删除执行任务：先停止仍在运行的用例，再软删除 run 与用例执行。
-func (s *EvalService) DeleteEvalRun(ctx context.Context, id string) error {
-	run, err := s.GetEvalRun(id)
+func (s *EvalService) DeleteEvalRun(ctx context.Context, projectID, id string) error {
+	run, err := s.GetEvalRunInProject(projectID, id)
 	if err != nil {
 		return err
 	}
 	if run.Status == model.EvalRunRunning || run.Status == model.EvalRunPending {
-		if _, err := s.StopEvalRun(ctx, id); err != nil {
+		if _, err := s.StopEvalRun(ctx, projectID, id); err != nil {
 			return err
 		}
 	}
@@ -513,11 +752,11 @@ func (s *EvalService) DeleteEvalRun(ctx context.Context, id string) error {
 }
 
 // GetResults 返回执行任务的完整结果：每条用例含其 Markdown 分析报告全文。
-func (s *EvalService) GetResults(id string) (*model.EvalRun, error) {
+func (s *EvalService) GetResults(projectID, id string) (*model.EvalRun, error) {
 	var run model.EvalRun
 	err := s.db.Preload("CaseExecutions", func(db *gorm.DB) *gorm.DB {
 		return db.Order("order_no asc")
-	}).First(&run, "id = ?", id).Error
+	}).First(&run, "id = ? AND project_id = ?", id, projectID).Error
 	if err != nil {
 		return nil, err
 	}
@@ -679,20 +918,36 @@ func (s *EvalService) dispatchTestTask(ctx context.Context, ce *model.CaseExecut
 		return false
 	}
 	setupScript := buildAgentSetupScript(mcps, skills)
+	inputFiles := s.resolveInputFiles(sc.FileIDs)
+	if run.PrestartScriptFileID != "" {
+		fo, err := s.files.Get(run.PrestartScriptFileID)
+		if err != nil {
+			s.failEval(ce, "resolve prestart script: "+err.Error())
+			return false
+		}
+		// 固定文件名，job.Build 识别后挂 sidecar，与 executor 同 Pod 常驻（适合 Mock HTTP）。
+		inputFiles = append(inputFiles, model.InputFileSpec{FileID: fo.ID, Filename: jobbackend.PrestartInputFilename})
+	}
+	testEnv, err := s.withRuntimeEnv(run.ProjectID, map[string]string{
+		"TARGET_BASE_URL":   endpoint.BaseURL,
+		"TARGET_MODEL_NAME": endpoint.ModelName,
+		"TARGET_API_KEY":    apiKey,
+	})
+	if err != nil {
+		s.failEval(ce, "resolve runtime env configs: "+err.Error())
+		return false
+	}
 
 	task, err := s.tasks.CreateTask(ctx, CreateTaskInput{
+		ProjectID:  run.ProjectID,
 		Name:       fmt.Sprintf("%s-%s", run.Name, ce.CaseName),
 		Image:      resolveTestImage(run, s.cfg),
 		Command:    buildTestCommand(sc.Description, run.TestModelCommand, setupScript),
-		InputFiles: s.resolveInputFiles(sc.FileIDs),
-		Env: map[string]string{
-			"TARGET_BASE_URL":   endpoint.BaseURL,
-			"TARGET_MODEL_NAME": endpoint.ModelName,
-			"TARGET_API_KEY":    apiKey,
-		},
+		InputFiles: inputFiles,
+		Env:        testEnv,
 		Role:            "test",
 		CaseExecutionID: ce.ID,
-		TimeoutSeconds:  config.Builtin.TestTimeoutSeconds,
+		TimeoutSeconds:  resolveTestTimeout(run),
 	})
 	if err != nil {
 		s.failEval(ce, "dispatch test task: "+err.Error())
@@ -800,7 +1055,11 @@ func (s *EvalService) dispatchEvalTask(ctx context.Context, ce *model.CaseExecut
 	}
 
 	// 评测输入落盘为文件对象，作为评测任务的 input_files 之一。
-	inputFile, err := s.files.SaveBytes([]byte(evalInputJSON), "eval_input.json", model.FilePurposeInput, ce.ID)
+	dispatchProjectID := ""
+	if r, err := s.getRun(ce.EvalRunID); err == nil {
+		dispatchProjectID = r.ProjectID
+	}
+	inputFile, err := s.files.SaveBytes([]byte(evalInputJSON), "eval_input.json", model.FilePurposeInput, ce.ID, dispatchProjectID)
 	if err != nil {
 		s.failEval(ce, "save eval input: "+err.Error())
 		return false
@@ -819,7 +1078,7 @@ func (s *EvalService) dispatchEvalTask(ctx context.Context, ce *model.CaseExecut
 			s.failEval(ce, "build ppt gold reference: "+err.Error())
 			return false
 		}
-		pptGoldFile, err := s.files.SaveBytes([]byte(pptGoldJSON), "gold_reference.json", model.FilePurposeInput, ce.ID)
+		pptGoldFile, err := s.files.SaveBytes([]byte(pptGoldJSON), "gold_reference.json", model.FilePurposeInput, ce.ID, dispatchProjectID)
 		if err != nil {
 			s.failEval(ce, "save ppt gold reference: "+err.Error())
 			return false
@@ -850,7 +1109,7 @@ func (s *EvalService) dispatchEvalTask(ctx context.Context, ce *model.CaseExecut
 				s.failEval(ce, "load ppt scorer "+name+": "+err.Error())
 				return false
 			}
-			fo, err := s.files.SaveBytes(data, name, model.FilePurposeInput, ce.ID)
+			fo, err := s.files.SaveBytes(data, name, model.FilePurposeInput, ce.ID, dispatchProjectID)
 			if err != nil {
 				s.failEval(ce, "save ppt scorer "+name+": "+err.Error())
 				return false
@@ -862,10 +1121,14 @@ func (s *EvalService) dispatchEvalTask(ctx context.Context, ce *model.CaseExecut
 	// 解析评测端点：优先本次 run 记录的 eval_endpoint_id；为空（历史数据）回退默认端点。
 	run, runErr := s.getRun(ce.EvalRunID)
 	var evalEP *model.EvalEndpoint
+	projectID := ""
+	if runErr == nil {
+		projectID = run.ProjectID
+	}
 	if runErr == nil && run.EvalEndpointID != "" {
-		evalEP, err = s.evalEndpoint.GetEndpoint(run.EvalEndpointID)
+		evalEP, err = s.evalEndpoint.GetEndpointInProject(projectID, run.EvalEndpointID)
 	} else {
-		evalEP, err = s.evalEndpoint.DefaultEndpoint()
+		evalEP, err = s.evalEndpoint.DefaultEndpoint(projectID)
 	}
 	if err != nil {
 		s.failEval(ce, "resolve eval endpoint: "+err.Error())
@@ -881,6 +1144,11 @@ func (s *EvalService) dispatchEvalTask(ctx context.Context, ce *model.CaseExecut
 		"EVAL_MODEL_NAME": evalEP.ModelName,
 		"EVAL_API_KEY":    evalAPIKey,
 	}
+	evalEnv, err = s.withRuntimeEnv(projectID, evalEnv)
+	if err != nil {
+		s.failEval(ce, "resolve runtime env configs: "+err.Error())
+		return false
+	}
 
 	// 使用本次 run 快照的用户自定义评测 prompt。
 	promptContent := config.Builtin.EvalPromptTemplate
@@ -889,6 +1157,7 @@ func (s *EvalService) dispatchEvalTask(ctx context.Context, ce *model.CaseExecut
 	}
 
 	task, err := s.tasks.CreateTask(ctx, CreateTaskInput{
+		ProjectID:       projectID,
 		Name:            "eval-" + ce.CaseName,
 		Image:           resolveEvalImage(run),
 		Command:         eval.BuildEvalCommand(promptContent, resolveEvalModelCommand(run), sc.EnablePPTVisualScore, sc.EnableHTMLVisualScore),
@@ -896,17 +1165,17 @@ func (s *EvalService) dispatchEvalTask(ctx context.Context, ce *model.CaseExecut
 		Env:             evalEnv,
 		Role:            "eval",
 		CaseExecutionID: ce.ID,
-		TimeoutSeconds:  config.Builtin.EvalTimeoutSeconds,
+		TimeoutSeconds:  resolveEvalTimeout(run),
 	})
 	if err != nil {
 		s.failEval(ce, "dispatch eval task: "+err.Error())
 		return false
 	}
-	s.db.Model(ce).Updates(map[string]any{"eval_task_id": task.ID, "status": model.CaseExecEvalRunning})
+	s.db.Model(ce).Updates(map[string]any{"eval_task_id": task.ID, "eval_attempts": ce.EvalAttempts + 1, "status": model.CaseExecEvalRunning})
 	return true
 }
 
-// advanceEvalStage 处理评测任务终态：解析报告 → REPORTED；失败→ERROR。
+// advanceEvalStage 处理评测任务终态：解析报告 → REPORTED；失败/报告异常→自动重试 EvalTask，耗尽后降级报告。
 func (s *EvalService) advanceEvalStage(ctx context.Context, ce *model.CaseExecution) {
 	if ce.EvalTaskID == "" {
 		return
@@ -917,37 +1186,78 @@ func (s *EvalService) advanceEvalStage(ctx context.Context, ce *model.CaseExecut
 	}
 	switch task.Status {
 	case model.TaskStatusSucceeded:
-		s.processReport(ce)
+		if reason := s.processReport(ce); reason != "" {
+			s.retryEvalOrFallback(ctx, ce, reason)
+		}
 	case model.TaskStatusFailed:
-		s.failEval(ce, "eval task failed: "+task.ErrorMessage)
+		s.retryEvalOrFallback(ctx, ce, "eval task failed: "+task.ErrorMessage)
 	case model.TaskStatusCancelled:
 		now := time.Now()
 		s.db.Model(ce).Updates(map[string]any{"status": model.CaseExecStopped, "finished_at": &now})
 	}
 }
 
+func (s *EvalService) retryEvalOrFallback(ctx context.Context, ce *model.CaseExecution, reason string) {
+	run, err := s.getRun(ce.EvalRunID)
+	if err != nil {
+		s.fallbackEvalReport(ce, defaultMaxEvalAttempts, reason)
+		return
+	}
+	maxAttempts := resolveMaxEvalAttempts(run)
+	if ce.EvalAttempts < maxAttempts {
+		s.db.Model(ce).Updates(map[string]any{"message": fmt.Sprintf("eval attempt %d/%d failed, retrying: %s", ce.EvalAttempts, maxAttempts, reason)})
+		if s.dispatchEvalTask(ctx, ce, model.DecodeSnapshot(run.SnapshotJSON)) {
+			return
+		}
+	}
+	s.fallbackEvalReport(ce, maxAttempts, reason)
+}
+
+func (s *EvalService) fallbackEvalReport(ce *model.CaseExecution, maxAttempts int, reason string) {
+	now := time.Now()
+	report := fmt.Sprintf(`# 评测阶段异常降级报告
+
+评测任务已达到最大尝试次数（%d 次），仍未获得可用评测报告。为避免单次评测链路抖动导致整个用例执行中断，系统将该用例标记为已生成降级报告，供人工排查。
+
+## 失败原因
+
+%s
+
+## 排查建议
+
+- 查看评测阶段产物中的 trace.jsonl / report.md。
+- 检查评测模型端点、API Key、网络、超时时间和执行器镜像依赖。
+- 如报告已生成但分数 JSON 解析失败，请检查评测 Prompt 末尾是否严格输出系统要求的 JSON 代码块。
+`, maxAttempts, reason)
+	s.db.Model(ce).Updates(map[string]any{
+		"status":       model.CaseExecReported,
+		"report":       report,
+		"message":      "eval degraded after retries: " + reason,
+		"score_status": model.ScoreParseFailed,
+		"score_error":  reason,
+		"finished_at":  &now,
+	})
+}
+
 // processReport 读取评测任务产物 report.md，原样保存为用例的分析报告并置 REPORTED。
 // 报告正文是给人阅读的自由格式文本，不做任何机器判定；报告末尾的机评量化 JSON 块
 // 则尝试解析出 score/issues，解析结果独立记录在 ScoreStatus，解析失败不影响
 // REPORTED 状态判定，也不会调用 failEval——量化环节与报告生成是两个独立维度。
-func (s *EvalService) processReport(ce *model.CaseExecution) {
+func (s *EvalService) processReport(ce *model.CaseExecution) string {
 	artifacts, err := s.files.ListArtifacts(ce.EvalTaskID)
 	if err != nil || len(artifacts) == 0 {
-		s.failEval(ce, "no eval artifact produced")
-		return
+		return "no eval artifact produced"
 	}
 	// 评测执行器上传的产物为 output.tar.gz，内含 report.md。
 	_, file, err := s.files.Open(artifacts[0].ID)
 	if err != nil {
-		s.failEval(ce, "open eval artifact: "+err.Error())
-		return
+		return "open eval artifact: " + err.Error()
 	}
 	defer file.Close()
 
 	raw, err := eval.ExtractReportFromTarGz(file)
 	if err != nil {
-		s.failEval(ce, "extract report: "+err.Error())
-		return
+		return "extract report: " + err.Error()
 	}
 	reportRaw := string(raw)
 
@@ -957,8 +1267,13 @@ func (s *EvalService) processReport(ce *model.CaseExecution) {
 
 	report := eval.NormalizeReport(reportRaw)
 	if report == "" {
-		s.failEval(ce, "empty analysis report")
-		return
+		return "empty analysis report"
+	}
+	if st, ok := scoreUpdates["score_status"].(model.CaseExecutionScoreStatus); ok && st == model.ScoreParseFailed {
+		if errText, _ := scoreUpdates["score_error"].(string); errText != "" {
+			return "score parse failed: " + errText
+		}
+		return "score parse failed"
 	}
 
 	now := time.Now()
@@ -970,6 +1285,7 @@ func (s *EvalService) processReport(ce *model.CaseExecution) {
 		updates[k] = v
 	}
 	s.db.Model(ce).Updates(updates)
+	return ""
 }
 
 // extractScoreUpdates 根据本次评测所属 EvalRun 的脚本版本决定是否解析机评分数：
@@ -1064,7 +1380,8 @@ type IssueCount struct {
 	Ratio  float64 `json:"ratio"`
 }
 
-// GetScoreSummary 聚合一个 EvalRun 下所有用例执行的机评分数与问题标签。
+// GetScoreSummary 聚合一个 EvalRun 下所有用例执行的机评分数与问题标签。runID 已在调用方
+// 通过 GetEvalRunInProject/GetResults 校验过项目归属，此处不再重复校验。
 func (s *EvalService) GetScoreSummary(runID string) (*ScoreSummary, error) {
 	var ces []model.CaseExecution
 	if err := s.db.Where("eval_run_id = ?", runID).Find(&ces).Error; err != nil {
@@ -1191,10 +1508,14 @@ type LeaderboardItem struct {
 
 // GetLeaderboard 按被测模型端点聚合近 sinceDays 天内（0 表示不限时间）已完成的
 // EvalRun，仅统计 score_status='OK' 的用例执行，得出各模型的均分/问题标签/趋势。
+// 结果按当前项目空间隔离，projectID 为空表示不限项目（仅供内部调用）。
 // 环比（与前一统计周期对比）留给前端按需请求两个 period 自行计算，避免这里
 // 引入“上一周期”的隐含时间窗定义分歧。
-func (s *EvalService) GetLeaderboard(sinceDays int) ([]LeaderboardItem, error) {
+func (s *EvalService) GetLeaderboard(projectID string, sinceDays int) ([]LeaderboardItem, error) {
 	q := s.db.Model(&model.EvalRun{}).Where("status IN ? AND score_prompt_version >= ?", []model.EvalRunStatus{model.EvalRunSucceeded, model.EvalRunFailed}, eval.CurrentScorePromptVersion)
+	if projectID != "" {
+		q = q.Where("project_id = ?", projectID)
+	}
 	if sinceDays > 0 {
 		q = q.Where("created_at >= ?", time.Now().AddDate(0, 0, -sinceDays))
 	}

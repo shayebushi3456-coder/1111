@@ -39,7 +39,7 @@ func periodDays(period string) int {
 // Query 参数：period=30d|90d|all（默认 30d），仅统计 score_status=OK 的用例执行。
 func (h *LeaderboardHandler) Get(c *gin.Context) {
 	period := c.DefaultQuery("period", "30d")
-	items, err := h.eval.GetLeaderboard(periodDays(period))
+	items, err := h.eval.GetLeaderboard(CurrentProjectID(c), periodDays(period))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
 		return

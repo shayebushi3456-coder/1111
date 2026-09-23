@@ -10,7 +10,7 @@ export function safeExportFilename(name: string, fallback: string): string {
 }
 
 export function normalizeZipPath(path: string): string {
-  return path.replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\/+/, '');
+  return path.replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\/+/, '').normalize('NFC');
 }
 
 export async function blobToBytes(blob: Blob): Promise<Uint8Array> {

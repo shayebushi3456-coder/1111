@@ -44,6 +44,7 @@ func (s CaseExecutionStatus) IsTerminal() bool {
 // EvalRun 一次执行任务：关联用例集快照 + 选用端点 + 聚合状态。
 type EvalRun struct {
 	ID             string         `gorm:"primaryKey;size:64" json:"id"`
+	ProjectID      string         `gorm:"index;size:64" json:"project_id"`
 	Name           string         `gorm:"size:128" json:"name"`
 	CaseSetID      string         `gorm:"index;size:64" json:"case_set_id"`
 	EndpointID     string         `gorm:"size:64" json:"endpoint_id"`
@@ -57,10 +58,17 @@ type EvalRun struct {
 	Errored        int            `json:"errored"`
 	// MaxConcurrent 本次执行任务的单请求并发上限（运行中用例数）。<=0 表示该维度不限流。
 	MaxConcurrent  int            `json:"max_concurrent"`
+	// PrestartScriptFileID 可选：测试 Pod 启动后、agent 执行前要跑的 .py（FilePurposePrestart）。空=不使用。
+	PrestartScriptFileID string `gorm:"size:64" json:"prestart_script_file_id,omitempty"`
 	// TestImage 本次执行任务的测试容器镜像；空表示回退到内置/服务默认镜像。
 	TestImage string `gorm:"size:256" json:"test_image,omitempty"`
 	// EvalImage 本次执行任务的评测容器镜像；空表示回退到 config.Builtin.EvalExecutorImage。
 	EvalImage string `gorm:"size:256" json:"eval_image,omitempty"`
+	// TestTimeoutSeconds / EvalTimeoutSeconds 分别覆盖测试/评测任务超时时间；<=0 表示使用内置默认。
+	TestTimeoutSeconds int64 `json:"test_timeout_seconds,omitempty"`
+	EvalTimeoutSeconds int64 `json:"eval_timeout_seconds,omitempty"`
+	// MaxEvalAttempts EvalTask 最大尝试次数；<=0 表示使用服务端默认值。
+	MaxEvalAttempts int `json:"max_eval_attempts,omitempty"`
 	// TestModelCommand 测试任务里模型启动命令片段（例如 "ccr code -p"）；空表示回退到内置默认。
 	TestModelCommand string `gorm:"size:256" json:"test_model_command,omitempty"`
 	// EvalModelCommand 评测任务里模型启动命令片段（例如 "claude -p"）；空表示回退到内置默认。
@@ -117,7 +125,9 @@ type CaseExecution struct {
 	CaseName    string              `gorm:"size:128" json:"case_name"`
 	TestTaskID  string              `gorm:"index;size:64" json:"test_task_id"`
 	EvalTaskID  string              `gorm:"index;size:64" json:"eval_task_id,omitempty"`
-	Status      CaseExecutionStatus `gorm:"size:32;index" json:"status"`
+	// EvalAttempts 评测任务已派发次数。评测阶段不稳定时允许自动重试，只重跑 EvalTask，不重跑 TestTask。
+	EvalAttempts int                 `json:"eval_attempts"`
+	Status       CaseExecutionStatus `gorm:"size:32;index" json:"status"`
 	ExitCode    *int                `json:"exit_code,omitempty"`
 	Message     string              `gorm:"type:text" json:"message,omitempty"`
 	Report      string              `gorm:"type:text" json:"report,omitempty"`

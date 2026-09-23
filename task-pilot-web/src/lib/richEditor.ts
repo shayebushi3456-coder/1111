@@ -1,4 +1,4 @@
-import { escapeHtml } from './ui';
+import { escapeAttr, escapeHtml, fmtSize } from './ui';
 import { renderMarkdown } from './renderers';
 
 // CheckpointDraft 单条校验点的编辑态：文本描述 + 已有文件 ID（编辑已有用例时）+ 本次新选中的文件
@@ -12,6 +12,9 @@ export interface CheckpointDraft {
 export interface CheckpointEditorRow {
   card: HTMLElement;
   checkpoints: CheckpointDraft[];
+  renderCheckpointFileHtml?: (cp: CheckpointDraft, idx: number) => string;
+  onCheckpointChange?: () => void;
+  onCheckpointRender?: () => void;
 }
 
 // ============================================================
@@ -150,6 +153,10 @@ export function setupMarkdownEditor(options: MarkdownEditorOptions): void {
   // 仅源码 / 源码+预览 切换：双栏是默认体验，切换态只影响当前编辑器自身。
   const toggle = options.toggleSelector ? options.root.querySelector(options.toggleSelector) as HTMLElement : null;
   const editor = options.editorSelector ? options.root.querySelector(options.editorSelector) as HTMLElement : null;
+  if (toggle && editor?.classList.contains('cs-md-editor-source-only')) {
+    toggle.classList.add('active');
+    toggle.title = '显示预览';
+  }
   toggle?.addEventListener('click', () => {
     if (!editor) return;
     const collapsed = editor.classList.toggle('cs-md-editor-source-only');
@@ -172,12 +179,29 @@ export function setupRichEditor(card: HTMLElement, initialText: string): void {
 function checkpointFileChipsHtml(cp: CheckpointDraft, idx: number): string {
   const chips: string[] = [];
   cp.existingFileIds.forEach((fid, fidx) => {
-    chips.push(`<span class="chip" style="font-size:11px;"><span class="mono">▢</span> ${escapeHtml(fid)} <span style="cursor:pointer;color:var(--err);margin-left:4px;" data-ckpt-remove-existing-file="${idx}:${fidx}">✕</span></span>`);
+    chips.push(`<span class="chip" style="font-size:11px;"><span class="mono">▢</span> ${escapeHtml(fid)} <button type="button" style="cursor:pointer;color:var(--err);margin-left:4px;border:none;background:none;padding:0;" data-ckpt-remove-existing-file="${idx}:${fidx}" aria-label="解绑参考文件 ${escapeAttr(fid)}">✕</button></span>`);
   });
   cp.newFiles.forEach((f, fidx) => {
-    chips.push(`<span class="chip" style="font-size:11px;"><span class="mono">▢</span> ${escapeHtml(f.name)} <span style="cursor:pointer;color:var(--err);margin-left:4px;" data-ckpt-remove-new-file="${idx}:${fidx}">✕</span></span>`);
+    chips.push(`<span class="chip" style="font-size:11px;"><span class="mono">▢</span> ${escapeHtml(f.name)} <button type="button" style="cursor:pointer;color:var(--err);margin-left:4px;border:none;background:none;padding:0;" data-ckpt-remove-new-file="${idx}:${fidx}" aria-label="移除参考文件 ${escapeAttr(f.name)}">✕</button></span>`);
   });
   return chips.join('');
+}
+
+function defaultCheckpointFileAssetsHtml(cp: CheckpointDraft, idx: number): string {
+  const rows: string[] = [];
+  cp.existingFileIds.forEach((fid, fidx) => rows.push(`
+    <div class="file-asset-row compact" data-ckpt-existing-file="${idx}:${fidx}">
+      <div class="file-asset-icon mono">REF</div>
+      <div class="file-asset-meta"><b>${escapeHtml(fid)}</b><span>已绑定 · 仅评测可见</span></div>
+      <div class="file-asset-actions"><button type="button" data-ckpt-remove-existing-file="${idx}:${fidx}">解绑</button></div>
+    </div>`));
+  cp.newFiles.forEach((f, fidx) => rows.push(`
+    <div class="file-asset-row compact" data-ckpt-new-file="${idx}:${fidx}">
+      <div class="file-asset-icon mono">NEW</div>
+      <div class="file-asset-meta"><b>${escapeHtml(f.name)}</b><span>${fmtSize(f.size)} · 待保存 · 仅评测可见</span></div>
+      <div class="file-asset-actions"><button type="button" data-ckpt-remove-new-file="${idx}:${fidx}">移除</button></div>
+    </div>`));
+  return rows.join('') || '<div class="file-empty-hint">暂无参考文件</div>';
 }
 
 // renderCheckpointEditor 渲染校验点列表：每条校验点是一个可展开的小卡片（文本 + 参考文件 chip +
@@ -185,46 +209,88 @@ function checkpointFileChipsHtml(cp: CheckpointDraft, idx: number): string {
 // 仅供评测阶段使用，与用例级关联文件的隔离语义不同，因此用独立的 UI 区块承载，不复用 cs-case-files。
 export function renderCheckpointEditor(row: CheckpointEditorRow): void {
   const list = row.card.querySelector('.cs-checkpoint-list') as HTMLElement;
+  const fileHtml = row.renderCheckpointFileHtml || defaultCheckpointFileAssetsHtml;
   list.innerHTML = row.checkpoints.map((cp, idx) => `
-    <div class="checkpoint-item" data-ckpt-idx="${idx}" style="border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-bottom:6px;">
-      <div style="display:flex;align-items:flex-start;gap:8px;">
-        <span class="mono" style="font-size:11px;color:var(--quiet);flex:0 0 auto;margin-top:2px;">#${idx + 1}</span>
-        <span style="flex:1;font-size:12.5px;line-height:1.5;">${escapeHtml(cp.description)}</span>
-        <button type="button" data-remove-checkpoint="${idx}" title="移除" style="flex:0 0 auto;border:none;background:none;cursor:pointer;color:var(--err);">×</button>
+    <div class="checkpoint-item" data-ckpt-idx="${idx}">
+      <div class="checkpoint-item-head">
+        <div><span class="mono">#${String(idx + 1).padStart(2, '0')}</span><strong>校验点</strong></div>
+        <div class="checkpoint-actions">
+          <button type="button" data-duplicate-checkpoint="${idx}">复制</button>
+          <button type="button" data-move-checkpoint-up="${idx}" ${idx === 0 ? 'disabled' : ''}>上移</button>
+          <button type="button" data-move-checkpoint-down="${idx}" ${idx === row.checkpoints.length - 1 ? 'disabled' : ''}>下移</button>
+          <button type="button" class="danger" data-remove-checkpoint="${idx}">删除</button>
+        </div>
       </div>
-      <div style="display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 4px 20px;">${checkpointFileChipsHtml(cp, idx) || '<span class="muted" style="font-size:11px;">未关联参考文件</span>'}</div>
-      <label style="margin-left:20px;font-size:11px;color:var(--accent);cursor:pointer;">
-        <input type="file" multiple data-ckpt-file-input="${idx}" style="display:none;">＋ 添加参考文件（标准答案/评分参考图/规范文档，仅评测阶段可见）
-      </label>
-    </div>`).join('') || '<span class="muted" style="font-size:12px;">尚未添加校验点</span>';
+      <textarea class="checkpoint-edit-textarea" data-ckpt-desc="${idx}" placeholder="输入详细校验标准，支持换行、编号和复杂符号。">${escapeHtml(cp.description)}</textarea>
+      <div class="checkpoint-files-head">
+        <span>参考文件 · 仅评测阶段可见</span>
+        <label>
+          <input type="file" multiple data-ckpt-file-input="${idx}">绑定参考文件
+        </label>
+      </div>
+      <div class="checkpoint-file-list">${fileHtml(cp, idx)}</div>
+    </div>`).join('') || '<div class="checkpoint-empty"><b>还没有校验点</b><span>在上方输入详细判定标准，然后点击“添加校验点”。</span></div>';
 
+  const notifyChange = () => row.onCheckpointChange?.();
+  list.querySelectorAll<HTMLTextAreaElement>('[data-ckpt-desc]').forEach(input => input.addEventListener('input', () => {
+    const idx = Number(input.getAttribute('data-ckpt-desc'));
+    row.checkpoints[idx].description = input.value;
+    notifyChange();
+  }));
+  list.querySelectorAll('[data-duplicate-checkpoint]').forEach(el => el.addEventListener('click', () => {
+    const idx = Number(el.getAttribute('data-duplicate-checkpoint'));
+    const cp = row.checkpoints[idx];
+    row.checkpoints.splice(idx + 1, 0, { description: `${cp.description}\n（副本）`, existingFileIds: [...cp.existingFileIds], newFiles: [...cp.newFiles] });
+    renderCheckpointEditor(row);
+    notifyChange();
+  }));
+  list.querySelectorAll('[data-move-checkpoint-up]').forEach(el => el.addEventListener('click', () => {
+    const idx = Number(el.getAttribute('data-move-checkpoint-up'));
+    if (idx <= 0) return;
+    [row.checkpoints[idx - 1], row.checkpoints[idx]] = [row.checkpoints[idx], row.checkpoints[idx - 1]];
+    renderCheckpointEditor(row);
+    notifyChange();
+  }));
+  list.querySelectorAll('[data-move-checkpoint-down]').forEach(el => el.addEventListener('click', () => {
+    const idx = Number(el.getAttribute('data-move-checkpoint-down'));
+    if (idx >= row.checkpoints.length - 1) return;
+    [row.checkpoints[idx + 1], row.checkpoints[idx]] = [row.checkpoints[idx], row.checkpoints[idx + 1]];
+    renderCheckpointEditor(row);
+    notifyChange();
+  }));
   list.querySelectorAll('[data-remove-checkpoint]').forEach(el => el.addEventListener('click', () => {
     row.checkpoints.splice(Number(el.getAttribute('data-remove-checkpoint')), 1);
     renderCheckpointEditor(row);
+    notifyChange();
   }));
   list.querySelectorAll('[data-ckpt-remove-existing-file]').forEach(el => el.addEventListener('click', () => {
     const [idx, fidx] = el.getAttribute('data-ckpt-remove-existing-file')!.split(':').map(Number);
     row.checkpoints[idx].existingFileIds.splice(fidx, 1);
     renderCheckpointEditor(row);
+    notifyChange();
   }));
   list.querySelectorAll('[data-ckpt-remove-new-file]').forEach(el => el.addEventListener('click', () => {
     const [idx, fidx] = el.getAttribute('data-ckpt-remove-new-file')!.split(':').map(Number);
     row.checkpoints[idx].newFiles.splice(fidx, 1);
     renderCheckpointEditor(row);
+    notifyChange();
   }));
   list.querySelectorAll<HTMLInputElement>('[data-ckpt-file-input]').forEach(input => input.addEventListener('change', () => {
     const idx = Number(input.getAttribute('data-ckpt-file-input'));
     if (input.files) row.checkpoints[idx].newFiles.push(...Array.from(input.files));
     input.value = '';
     renderCheckpointEditor(row);
+    notifyChange();
   }));
+  row.onCheckpointRender?.();
 }
 
 export function addCheckpointFromInput(row: CheckpointEditorRow): void {
-  const input = row.card.querySelector('.cs-checkpoint-input') as HTMLInputElement;
+  const input = row.card.querySelector('.cs-checkpoint-input') as HTMLTextAreaElement;
   const value = input.value.trim();
   if (!value) return;
   row.checkpoints.push({ description: value, existingFileIds: [], newFiles: [] });
   input.value = '';
   renderCheckpointEditor(row);
+  row.onCheckpointChange?.();
 }

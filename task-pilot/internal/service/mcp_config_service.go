@@ -38,7 +38,7 @@ func validateMCPConfigJSON(raw string) error {
 	return nil
 }
 
-func (s *MCPConfigService) Create(in UpsertMCPConfigInput) (*model.MCPConfig, error) {
+func (s *MCPConfigService) Create(projectID string, in UpsertMCPConfigInput) (*model.MCPConfig, error) {
 	if in.Name == "" {
 		return nil, fmt.Errorf("name is required")
 	}
@@ -47,6 +47,7 @@ func (s *MCPConfigService) Create(in UpsertMCPConfigInput) (*model.MCPConfig, er
 	}
 	m := &model.MCPConfig{
 		ID:          util.NewID("mcp"),
+		ProjectID:   projectID,
 		Name:        in.Name,
 		Description: in.Description,
 		ConfigJSON:  in.ConfigJSON,
@@ -57,8 +58,8 @@ func (s *MCPConfigService) Create(in UpsertMCPConfigInput) (*model.MCPConfig, er
 	return m, nil
 }
 
-func (s *MCPConfigService) Update(id string, in UpsertMCPConfigInput) (*model.MCPConfig, error) {
-	m, err := s.Get(id)
+func (s *MCPConfigService) Update(projectID, id string, in UpsertMCPConfigInput) (*model.MCPConfig, error) {
+	m, err := s.GetInProject(projectID, id)
 	if err != nil {
 		return nil, err
 	}
@@ -78,6 +79,7 @@ func (s *MCPConfigService) Update(id string, in UpsertMCPConfigInput) (*model.MC
 	return m, nil
 }
 
+// Get 按 ID 查询，不做项目归属校验，供内部（如按用例快照绑定的 MCP ID 批量还原配置）使用。
 func (s *MCPConfigService) Get(id string) (*model.MCPConfig, error) {
 	var m model.MCPConfig
 	if err := s.db.First(&m, "id = ?", id).Error; err != nil {
@@ -86,16 +88,25 @@ func (s *MCPConfigService) Get(id string) (*model.MCPConfig, error) {
 	return &m, nil
 }
 
-func (s *MCPConfigService) List() ([]model.MCPConfig, error) {
+// GetInProject 按 ID+projectID 查询，防止跨项目通过 ID 越权访问。
+func (s *MCPConfigService) GetInProject(projectID, id string) (*model.MCPConfig, error) {
+	var m model.MCPConfig
+	if err := s.db.First(&m, "id = ? AND project_id = ?", id, projectID).Error; err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+func (s *MCPConfigService) List(projectID string) ([]model.MCPConfig, error) {
 	var items []model.MCPConfig
-	if err := s.db.Order("created_at desc").Find(&items).Error; err != nil {
+	if err := s.db.Where("project_id = ?", projectID).Order("created_at desc").Find(&items).Error; err != nil {
 		return nil, err
 	}
 	return items, nil
 }
 
-func (s *MCPConfigService) Delete(id string) error {
-	return s.db.Delete(&model.MCPConfig{}, "id = ?", id).Error
+func (s *MCPConfigService) Delete(projectID, id string) error {
+	return s.db.Where("project_id = ?", projectID).Delete(&model.MCPConfig{}, "id = ?", id).Error
 }
 
 // GetMany 按 ID 批量查询（保持稳定顺序，跳过不存在的 ID），供派发测试任务时解析用例绑定使用。

@@ -1,4 +1,5 @@
 export type AppView =
+  | 'workspace-home'
   | 'dashboard'
   | 'evalruns'
   | 'evalrun-detail'
@@ -9,7 +10,11 @@ export type AppView =
   | 'prompts'
   | 'leaderboard'
   | 'mcp-servers'
-  | 'skills';
+  | 'skills'
+  | 'runtime-envs'
+  | 'prestart-scripts'
+  | 'admin-users'
+  | 'project-manage';
 
 export interface RouteLocation {
   view: AppView;
@@ -19,7 +24,8 @@ export interface RouteLocation {
 type StaticRoute = { view: AppView; hash: string };
 
 const STATIC_ROUTES: StaticRoute[] = [
-  { view: 'dashboard', hash: '#/' },
+  { view: 'workspace-home', hash: '#/' },
+  { view: 'dashboard', hash: '#/project' },
   { view: 'evalruns', hash: '#/eval-runs' },
   { view: 'casesets', hash: '#/case-sets' },
   { view: 'target-endpoints', hash: '#/config/target-endpoints' },
@@ -28,6 +34,10 @@ const STATIC_ROUTES: StaticRoute[] = [
   { view: 'leaderboard', hash: '#/leaderboard' },
   { view: 'mcp-servers', hash: '#/config/mcp-servers' },
   { view: 'skills', hash: '#/config/skills' },
+  { view: 'runtime-envs', hash: '#/config/runtime-envs' },
+  { view: 'prestart-scripts', hash: '#/config/prestart-scripts' },
+  { view: 'admin-users', hash: '#/admin/users' },
+  { view: 'project-manage', hash: '#/projects/manage' },
 ];
 
 const STATIC_BY_VIEW = new Map(STATIC_ROUTES.map(r => [r.view, r.hash]));
@@ -63,7 +73,7 @@ export function parseRouteHash(hash: string): RouteLocation {
   const caseSetMatch = normalized.match(/^#\/case-sets\/([^/]+)$/);
   if (caseSetMatch) return { view: 'caseset-detail', param: decodeParam(caseSetMatch[1]) };
 
-  return { view: 'dashboard' };
+  return { view: 'workspace-home' };
 }
 
 export function navKeyOf(view: AppView): AppView {
@@ -80,7 +90,7 @@ export class HashRouter {
   start(): void {
     window.addEventListener('hashchange', () => this.handleHashChange());
     if (!window.location.hash) {
-      this.navigate('dashboard', undefined, { replace: true });
+      this.navigate('workspace-home', undefined, { replace: true });
       return;
     }
     this.handleHashChange(true);

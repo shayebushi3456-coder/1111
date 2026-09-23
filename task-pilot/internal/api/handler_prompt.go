@@ -32,7 +32,7 @@ func (h *PromptHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, ErrorResponse{Error: err.Error()})
 		return
 	}
-	p, err := h.prompts.Create(service.UpsertPromptInput{
+	p, err := h.prompts.Create(CurrentProjectID(c), service.UpsertPromptInput{
 		Name:      req.Name,
 		Content:   req.Content,
 		IsDefault: req.IsDefault,
@@ -45,7 +45,7 @@ func (h *PromptHandler) Create(c *gin.Context) {
 }
 
 func (h *PromptHandler) List(c *gin.Context) {
-	ps, err := h.prompts.List()
+	ps, err := h.prompts.List(CurrentProjectID(c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
 		return
@@ -58,7 +58,7 @@ func (h *PromptHandler) List(c *gin.Context) {
 }
 
 func (h *PromptHandler) Get(c *gin.Context) {
-	p, err := h.prompts.Get(c.Param("id"))
+	p, err := h.prompts.GetInProject(CurrentProjectID(c), c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusNotFound, ErrorResponse{Error: err.Error()})
 		return
@@ -72,7 +72,7 @@ func (h *PromptHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, ErrorResponse{Error: err.Error()})
 		return
 	}
-	p, err := h.prompts.Update(c.Param("id"), service.UpsertPromptInput{
+	p, err := h.prompts.Update(CurrentProjectID(c), c.Param("id"), service.UpsertPromptInput{
 		Name:      req.Name,
 		Content:   req.Content,
 		IsDefault: req.IsDefault,
@@ -85,7 +85,7 @@ func (h *PromptHandler) Update(c *gin.Context) {
 }
 
 func (h *PromptHandler) Delete(c *gin.Context) {
-	if err := h.prompts.Delete(c.Param("id")); err != nil {
+	if err := h.prompts.Delete(CurrentProjectID(c), c.Param("id")); err != nil {
 		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
 		return
 	}

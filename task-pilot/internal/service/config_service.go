@@ -29,8 +29,8 @@ type UpsertEndpointInput struct {
 	IsDefault bool
 }
 
-// CreateEndpoint 新增被测端点。
-func (s *ConfigService) CreateEndpoint(in UpsertEndpointInput) (*model.TargetEndpoint, error) {
+// CreateEndpoint 新增被测端点（归属 projectID）。同项目内 is_default 唯一。
+func (s *ConfigService) CreateEndpoint(projectID string, in UpsertEndpointInput) (*model.TargetEndpoint, error) {
 	if in.Name == "" || in.BaseURL == "" || in.ModelName == "" {
 		return nil, fmt.Errorf("name, base_url and model_name are required")
 	}
@@ -40,6 +40,7 @@ func (s *ConfigService) CreateEndpoint(in UpsertEndpointInput) (*model.TargetEnd
 	}
 	ep := &model.TargetEndpoint{
 		ID:        util.NewID("ep"),
+		ProjectID: projectID,
 		Name:      in.Name,
 		BaseURL:   in.BaseURL,
 		ModelName: in.ModelName,
@@ -48,7 +49,7 @@ func (s *ConfigService) CreateEndpoint(in UpsertEndpointInput) (*model.TargetEnd
 	}
 	err = s.db.Transaction(func(tx *gorm.DB) error {
 		if in.IsDefault {
-			if err := tx.Model(&model.TargetEndpoint{}).Where("is_default = ?", true).Update("is_default", false).Error; err != nil {
+			if err := tx.Model(&model.TargetEndpoint{}).Where("is_default = ? AND project_id = ?", true, projectID).Update("is_default", false).Error; err != nil {
 				return err
 			}
 		}
@@ -60,9 +61,10 @@ func (s *ConfigService) CreateEndpoint(in UpsertEndpointInput) (*model.TargetEnd
 	return ep, nil
 }
 
-// UpdateEndpoint 更新端点。APIKey 为空则保留原值。
-func (s *ConfigService) UpdateEndpoint(id string, in UpsertEndpointInput) (*model.TargetEndpoint, error) {
-	ep, err := s.GetEndpoint(id)
+// UpdateEndpoint 更新端点。APIKey 为空则保留原值。projectID 用于校验端点归属，
+// 防止跨项目通过 ID 越权更新。
+func (s *ConfigService) UpdateEndpoint(projectID, id string, in UpsertEndpointInput) (*model.TargetEndpoint, error) {
+	ep, err := s.GetEndpointInProject(projectID, id)
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +87,7 @@ func (s *ConfigService) UpdateEndpoint(id string, in UpsertEndpointInput) (*mode
 	ep.IsDefault = in.IsDefault
 	err = s.db.Transaction(func(tx *gorm.DB) error {
 		if in.IsDefault {
-			if err := tx.Model(&model.TargetEndpoint{}).Where("is_default = ? AND id <> ?", true, id).Update("is_default", false).Error; err != nil {
+			if err := tx.Model(&model.TargetEndpoint{}).Where("is_default = ? AND id <> ? AND project_id = ?", true, id, projectID).Update("is_default", false).Error; err != nil {
 				return err
 			}
 		}
@@ -97,7 +99,8 @@ func (s *ConfigService) UpdateEndpoint(id string, in UpsertEndpointInput) (*mode
 	return ep, nil
 }
 
-// GetEndpoint 按 ID 查端点（含加密 api_key，供内部注入使用）。
+// GetEndpoint 按 ID 查端点（含加密 api_key，供内部注入使用），不做项目归属校验，
+// 供调度器等内部代码在已知安全上下文中直接按 ID 取值使用。
 func (s *ConfigService) GetEndpoint(id string) (*model.TargetEndpoint, error) {
 	var ep model.TargetEndpoint
 	if err := s.db.First(&ep, "id = ?", id).Error; err != nil {
@@ -106,24 +109,33 @@ func (s *ConfigService) GetEndpoint(id string) (*model.TargetEndpoint, error) {
 	return &ep, nil
 }
 
-// ListEndpoints 列出全部端点。
-func (s *ConfigService) ListEndpoints() ([]model.TargetEndpoint, error) {
+// GetEndpointInProject 按 ID+projectID 查端点，防止跨项目通过 ID 越权访问。
+func (s *ConfigService) GetEndpointInProject(projectID, id string) (*model.TargetEndpoint, error) {
+	var ep model.TargetEndpoint
+	if err := s.db.First(&ep, "id = ? AND project_id = ?", id, projectID).Error; err != nil {
+		return nil, err
+	}
+	return &ep, nil
+}
+
+// ListEndpoints 列出指定项目下的全部端点。
+func (s *ConfigService) ListEndpoints(projectID string) ([]model.TargetEndpoint, error) {
 	var eps []model.TargetEndpoint
-	if err := s.db.Order("created_at desc").Find(&eps).Error; err != nil {
+	if err := s.db.Where("project_id = ?", projectID).Order("created_at desc").Find(&eps).Error; err != nil {
 		return nil, err
 	}
 	return eps, nil
 }
 
-// DeleteEndpoint 删除端点（软删）。
-func (s *ConfigService) DeleteEndpoint(id string) error {
-	return s.db.Delete(&model.TargetEndpoint{}, "id = ?", id).Error
+// DeleteEndpoint 删除端点（软删），要求归属指定项目。
+func (s *ConfigService) DeleteEndpoint(projectID, id string) error {
+	return s.db.Where("project_id = ?", projectID).Delete(&model.TargetEndpoint{}, "id = ?", id).Error
 }
 
-// DefaultEndpoint 返回默认端点，供 EvalRun 未指定端点时使用（阶段二）。
-func (s *ConfigService) DefaultEndpoint() (*model.TargetEndpoint, error) {
+// DefaultEndpoint 返回指定项目的默认端点，供 EvalRun 未指定端点时使用（阶段二）。
+func (s *ConfigService) DefaultEndpoint(projectID string) (*model.TargetEndpoint, error) {
 	var ep model.TargetEndpoint
-	err := s.db.Where("is_default = ?", true).First(&ep).Error
+	err := s.db.Where("is_default = ? AND project_id = ?", true, projectID).First(&ep).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, fmt.Errorf("no default target endpoint configured")
 	}

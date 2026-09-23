@@ -21,10 +21,23 @@ export const filesApi = {
     form.append('purpose', 'input');
     return api.postForm<FileResponse>('/files/upload', form);
   },
+  /** 上传测试 Pod 前置 .py 脚本。 */
+  uploadPrestart: (file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    form.append('purpose', 'prestart');
+    return api.postForm<FileResponse>('/files/upload', form);
+  },
+  /** 列出当前项目下的前置脚本。 */
+  listPrestart: () => api.get<{ files: FileResponse[] }>('/files?purpose=prestart').then(r => r.files),
+  /** 删除前置脚本。 */
+  remove: (fileId: string) => api.del<{ status: string }>(`/files/${fileId}`),
+  /** 文件元信息（用于用例集已有附件回显原始文件名）。 */
+  get: (fileId: string) => api.get<FileResponse>(`/files/${fileId}`),
   /** 文件下载直链，用于 <a href> 或新开标签页，浏览器原生下载不占用前端内存。 */
   downloadUrl: (fileId: string) => apiUrl(`/files/${fileId}/download`),
-  /** 拉取文件二进制内容（用于本地解析，如产物 tar.gz）。 */
-  downloadBlob: (fileId: string) => api.getBlob(`/files/${fileId}/download`),
+  /** 拉取文件二进制内容（用于本地解析/预览，如产物 tar.gz；inline=1 不触发下载权限）。 */
+  downloadBlob: (fileId: string) => api.getBlob(`/files/${fileId}/download?inline=1`),
   /** 拉取文件二进制内容并尽量从响应头解析原始文件名（用例集导出使用）。 */
   async downloadBlobWithName(fileId: string): Promise<{ blob: Blob; filename: string }> {
     const res = await fetch(apiUrl(`/files/${fileId}/download`));

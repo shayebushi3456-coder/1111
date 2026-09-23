@@ -1,13 +1,17 @@
 import { evalRunsApi, leaderboardApi } from '@/api/evalRuns';
+import { filesApi } from '@/api/files';
 import { downloadZip } from '@/lib/minizip';
 import { escapeHtml, emptyStateHtml, errorStateHtml, fmtTime, skeletonRows } from '@/lib/ui';
 import { badgeHtml, caseMessageTagHtml, CASE_STATUS_MAP, RUN_STATUS_MAP } from '@/lib/status';
 import { issueTagsHtml, issueTagLabel, scorePillHtml } from '@/lib/issueTags';
 import { sanitizeFolderName } from '@/lib/filePreview';
 import { delegate, renderListInChunks } from '@/core/rendering';
-import { cache, loadCaseSets, loadEvalEndpoints, loadEvalRuns, loadPrompts, loadTargetEndpoints } from '@/core/dataCache';
+import { pageInfoText, renderPagination } from '@/core/pagination';
+import { cache, loadCaseSets, loadEvalEndpoints, loadPrompts, loadTargetEndpoints } from '@/core/dataCache';
 import { confirmAction, closeModal, errMsg, openModal, toast, toastError } from '@/core/feedback';
 import { canOpenCaseReport, fetchTaskMembers, openArtifactsDrawer, openReportDrawer, openTraceDrawer, renderTraceFromText } from '@/features/preview/previewRuntime';
+import { requirePermission, handleAuthError, hasPermission } from '@/core/auth';
+import { canWrite as canWriteProject, canDownload as canDownloadProject, requireWrite as requireWriteProject } from '@/core/project';
 import type { CaseExecution, CaseSet, EvalRun, LeaderboardItem, ScoreSummary } from '@/types';
 import type { AppView } from '@/core/router';
 
@@ -20,6 +24,7 @@ let activeEvalRunId: string | null = null;
 let evalRunTableRenderCancel: (() => void) | null = null;
 let evalRunTableDisposeEvents: (() => void) | null = null;
 let evalRunTableRenderSeq = 0;
+let evalRunListState = { page: 1, pageSize: 20, q: '' };
 
 export function initEvalRunPages(deps: { routeTo: RouteTo; showView: ShowView; setCrumbs: (html: string) => void }): void {
   routeTo = deps.routeTo;
@@ -32,22 +37,43 @@ export async function renderEvalRunList(): Promise<void> {
   const wrap = document.getElementById('evalrun-list')!;
   wrap.innerHTML = skeletonRows(5);
   let runs: EvalRun[];
+  let total = 0;
+  let page = evalRunListState.page;
+  let pageSize = evalRunListState.pageSize;
   let caseSets: CaseSet[];
   try {
-    [runs, caseSets] = await Promise.all([loadEvalRuns(true), loadCaseSets()]);
+    const [res, cs] = await Promise.all([
+      evalRunsApi.listPaged({ page: evalRunListState.page, page_size: evalRunListState.pageSize, q: evalRunListState.q || undefined }),
+      loadCaseSets(),
+    ]);
+    runs = res.eval_runs || [];
+    total = res.total ?? runs.length;
+    page = res.page || evalRunListState.page;
+    pageSize = res.page_size || evalRunListState.pageSize;
+    caseSets = cs;
   } catch (e) {
     wrap.innerHTML = errorStateHtml(errMsg(e));
     return;
   }
+  const search = document.getElementById('er-search') as HTMLInputElement;
+  if (search && search.value !== evalRunListState.q) search.value = evalRunListState.q;
+  const newRunBtn = document.getElementById('btn-new-evalrun') as HTMLButtonElement | null;
+  if (newRunBtn) newRunBtn.style.display = canWriteProject() ? '' : 'none';
+  document.getElementById('er-page-info')!.textContent = pageInfoText(total, page, pageSize);
+  renderPagination(document.getElementById('er-pagination')!, { page, pageSize, total }, next => {
+    evalRunListState.page = next;
+    renderEvalRunList();
+  });
   const selectAllBox = document.getElementById('er-select-all') as HTMLInputElement;
   const batchDeleteBtn = document.getElementById('er-batch-delete-btn') as HTMLButtonElement;
   const selCountEl = document.getElementById('er-selected-count') as HTMLElement;
+  const canWriteRuns = canWriteProject();
   selectAllBox.checked = false;
   batchDeleteBtn.disabled = true;
+  batchDeleteBtn.style.display = canWriteRuns ? '' : 'none';
   selCountEl.style.display = 'none';
-  if (runs.length === 0) { wrap.innerHTML = emptyStateHtml('还没有评测执行', '从用例集详情页发起第一次评测执行。'); return; }
-  const sorted = [...runs].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-  wrap.innerHTML = sorted.map((r, i) => {
+  if (runs.length === 0) { wrap.innerHTML = emptyStateHtml(evalRunListState.q ? '没有匹配的评测执行' : '还没有评测执行', evalRunListState.q ? '换个关键词试试。' : '从用例集详情页发起第一次评测执行。'); return; }
+  wrap.innerHTML = runs.map((r, i) => {
     const cs = caseSets.find(c => c.id === r.case_set_id);
     const pct = r.total ? Math.round(((r.reported + r.errored) / r.total) * 100) : 0;
     return `<div class="row-item" style="animation-delay:${i * 30}ms" data-open-run="${r.id}">
@@ -83,6 +109,7 @@ export async function renderEvalRunList(): Promise<void> {
   };
   wrap.querySelectorAll('.er-row-check').forEach(cb => cb.addEventListener('click', (e) => { e.stopPropagation(); refreshErSelection(); }));
   batchDeleteBtn.onclick = () => {
+    if (!requireWriteProject('删除评测执行')) return;
     const ids = Array.from(wrap.querySelectorAll<HTMLInputElement>('.er-row-check:checked')).map(cb => cb.getAttribute('data-er-check')!);
     if (ids.length === 0) return;
     confirmAction('批量删除评测执行', `将永久删除已选 ${ids.length} 个评测执行及其所有用例执行记录，此操作不可撤销。`, async () => {
@@ -98,6 +125,11 @@ export async function renderEvalRunList(): Promise<void> {
 
 document.getElementById('btn-new-evalrun')!.addEventListener('click', openNewEvalRunModal);
 document.getElementById('btn-preview-local-trace')!.addEventListener('click', previewLocalTraceFile);
+document.getElementById('er-search')?.addEventListener('input', (e) => {
+  evalRunListState.q = (e.target as HTMLInputElement).value.trim();
+  evalRunListState.page = 1;
+  window.setTimeout(() => renderEvalRunList(), 150);
+});
 export async function previewLocalTraceFile(): Promise<void> {
   const input = document.createElement('input');
   input.type = 'file';
@@ -115,12 +147,15 @@ export async function previewLocalTraceFile(): Promise<void> {
   input.click();
 }
 export async function openNewEvalRunModal(): Promise<void> {
+  if (!requirePermission('eval_run:create', '新建评测执行')) return;
+  if (!requireWriteProject('新建评测执行')) return;
   const submitBtn = document.getElementById('nr-submit') as HTMLButtonElement;
   submitBtn.disabled = true;
   openModal('modal-new-evalrun');
   try {
-    const [caseSets, targetEps, evalEps, prompts] = await Promise.all([
+    const [caseSets, targetEps, evalEps, prompts, prestartScripts] = await Promise.all([
       loadCaseSets(), loadTargetEndpoints(), loadEvalEndpoints(), loadPrompts(),
+      filesApi.listPrestart().catch(() => []),
     ]);
     if (caseSets.length === 0) {
       closeModal('modal-new-evalrun');
@@ -141,6 +176,14 @@ export async function openNewEvalRunModal(): Promise<void> {
     (document.getElementById('nr-endpoint') as HTMLSelectElement).innerHTML = targetEps.map(e => `<option value="${e.id}">${escapeHtml(e.name)}${e.is_default ? ' · 默认' : ''}</option>`).join('');
     (document.getElementById('nr-eval-endpoint') as HTMLSelectElement).innerHTML = evalEps.map(e => `<option value="${e.id}">${escapeHtml(e.name)}${e.is_default ? ' · 默认' : ''}</option>`).join('');
     (document.getElementById('nr-prompt') as HTMLSelectElement).innerHTML = prompts.map(p => `<option value="${p.id}">${escapeHtml(p.name)}${p.is_default ? ' · 默认' : ''}</option>`).join('');
+    (document.getElementById('nr-prestart') as HTMLSelectElement).innerHTML =
+      `<option value="">不使用</option>` +
+      prestartScripts.map(f => `<option value="${escapeHtml(f.file_id)}">${escapeHtml(f.filename)}</option>`).join('');
+    (document.getElementById('nr-test-image') as HTMLInputElement).value = '';
+    (document.getElementById('nr-eval-image') as HTMLInputElement).value = '';
+    (document.getElementById('nr-test-timeout') as HTMLInputElement).value = '';
+    (document.getElementById('nr-eval-timeout') as HTMLInputElement).value = '';
+    (document.getElementById('nr-max-eval-attempts') as HTMLInputElement).value = '3';
     (document.getElementById('nr-max-concurrent') as HTMLInputElement).value = '';
     submitBtn.disabled = false;
   } catch (e) {
@@ -163,6 +206,15 @@ document.getElementById('nr-submit')!.addEventListener('click', async () => {
     const maxConcurrentRaw = (document.getElementById('nr-max-concurrent') as HTMLInputElement).value.trim();
     const maxConcurrent = maxConcurrentRaw ? parseInt(maxConcurrentRaw, 10) : undefined;
     const explicitName = (document.getElementById('nr-name') as HTMLInputElement).value.trim();
+    const testImage = (document.getElementById('nr-test-image') as HTMLInputElement).value.trim();
+    const evalImage = (document.getElementById('nr-eval-image') as HTMLInputElement).value.trim();
+    const testTimeoutRaw = (document.getElementById('nr-test-timeout') as HTMLInputElement).value.trim();
+    const evalTimeoutRaw = (document.getElementById('nr-eval-timeout') as HTMLInputElement).value.trim();
+    const testTimeout = testTimeoutRaw ? parseInt(testTimeoutRaw, 10) : undefined;
+    const evalTimeout = evalTimeoutRaw ? parseInt(evalTimeoutRaw, 10) : undefined;
+    const maxEvalAttemptsRaw = (document.getElementById('nr-max-eval-attempts') as HTMLInputElement).value.trim();
+    const maxEvalAttempts = maxEvalAttemptsRaw ? parseInt(maxEvalAttemptsRaw, 10) : undefined;
+    const prestartScriptFileId = (document.getElementById('nr-prestart') as HTMLSelectElement).value;
     const selectedCaseSetName = (document.getElementById('nr-caseset') as HTMLSelectElement).selectedOptions[0]?.textContent?.replace(/（\d+ 条用例）$/, '').trim() || '评测执行';
     const defaultName = `${selectedCaseSetName}-${new Date().toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).replace(/[/:\s]/g, '')}`;
     const run = await evalRunsApi.create({
@@ -171,14 +223,20 @@ document.getElementById('nr-submit')!.addEventListener('click', async () => {
       endpoint_id: (document.getElementById('nr-endpoint') as HTMLSelectElement).value || undefined,
       eval_endpoint_id: (document.getElementById('nr-eval-endpoint') as HTMLSelectElement).value || undefined,
       prompt_id: (document.getElementById('nr-prompt') as HTMLSelectElement).value || undefined,
+      test_image: testImage || undefined,
+      eval_image: evalImage || undefined,
+      test_timeout_seconds: testTimeout !== undefined && !isNaN(testTimeout) && testTimeout > 0 ? testTimeout : undefined,
+      eval_timeout_seconds: evalTimeout !== undefined && !isNaN(evalTimeout) && evalTimeout > 0 ? evalTimeout : undefined,
+      max_eval_attempts: maxEvalAttempts !== undefined && !isNaN(maxEvalAttempts) && maxEvalAttempts > 0 ? Math.min(maxEvalAttempts, 10) : undefined,
       max_concurrent: maxConcurrent !== undefined && !isNaN(maxConcurrent) && maxConcurrent > 0 ? maxConcurrent : undefined,
+      prestart_script_file_id: prestartScriptFileId || undefined,
     });
     cache.evalRuns = null;
     closeModal('modal-new-evalrun');
     toast('评测执行已创建，用例已排入队列');
     routeTo('evalrun-detail', run.id);
   } catch (e) {
-    toastError('创建失败', e);
+    if (!(await handleAuthError(e))) toastError('创建失败', e);
   } finally {
     btn.disabled = false;
   }
@@ -233,7 +291,7 @@ export async function openEvalRunDetail(id: string): Promise<void> {
   document.querySelectorAll('#view-evalrun-detail [data-view-link]').forEach(el => el.addEventListener('click', (e) => { e.preventDefault(); routeTo('evalruns'); }));
 
   document.getElementById('erd-title')!.textContent = '加载中…';
-  document.getElementById('erd-case-table-body')!.innerHTML = `<tr><td colspan="9">${skeletonRows(3)}</td></tr>`;
+  document.getElementById('erd-case-table-body')!.innerHTML = `<tr><td colspan="10">${skeletonRows(3)}</td></tr>`;
 
   let run: EvalRun;
   let scoreSummary: ScoreSummary | undefined;
@@ -243,11 +301,14 @@ export async function openEvalRunDetail(id: string): Promise<void> {
     scoreSummary = resp.score_summary;
   } catch (e) {
     document.getElementById('erd-title')!.textContent = '加载失败';
-    document.getElementById('erd-case-table-body')!.innerHTML = `<tr><td colspan="9">${errorStateHtml(errMsg(e))}</td></tr>`;
+    document.getElementById('erd-case-table-body')!.innerHTML = `<tr><td colspan="10">${errorStateHtml(errMsg(e))}</td></tr>`;
     return;
   }
 
-  const [caseSets, targetEps, evalEps] = await Promise.all([loadCaseSets(), loadTargetEndpoints(), loadEvalEndpoints()]);
+  const [csRes, teRes, eeRes] = await Promise.allSettled([loadCaseSets(), loadTargetEndpoints(), loadEvalEndpoints()]);
+  const caseSets = csRes.status === 'fulfilled' ? csRes.value : [];
+  const targetEps = teRes.status === 'fulfilled' ? teRes.value : [];
+  const evalEps = eeRes.status === 'fulfilled' ? eeRes.value : [];
   const cs = caseSets.find(c => c.id === run.case_set_id);
   const te = targetEps.find(e => e.id === run.endpoint_id);
   const ee = evalEps.find(e => e.id === run.eval_endpoint_id);
@@ -266,12 +327,20 @@ export async function openEvalRunDetail(id: string): Promise<void> {
   document.getElementById('erd-config-lines')!.innerHTML = `
     <div class="flex-between"><span class="muted">被测端点</span><span class="mono">${te ? escapeHtml(te.name) : '--'}</span></div>
     <div class="flex-between"><span class="muted">评测端点</span><span class="mono">${ee ? escapeHtml(ee.name) : '--'}</span></div>
+    <div class="flex-between"><span class="muted">测试任务镜像</span><span class="mono" title="${escapeHtml(run.test_image || '服务端默认')}">${escapeHtml(run.test_image || '服务端默认')}</span></div>
+    <div class="flex-between"><span class="muted">评测任务镜像</span><span class="mono" title="${escapeHtml(run.eval_image || '服务端默认')}">${escapeHtml(run.eval_image || '服务端默认')}</span></div>
+    <div class="flex-between"><span class="muted">测试任务超时</span><span class="mono">${run.test_timeout_seconds ? run.test_timeout_seconds + 's' : '服务端默认'}</span></div>
+    <div class="flex-between"><span class="muted">评测任务超时</span><span class="mono">${run.eval_timeout_seconds ? run.eval_timeout_seconds + 's' : '服务端默认'}</span></div>
+    <div class="flex-between"><span class="muted">评测最大尝试次数</span><span class="mono">${run.max_eval_attempts || 3}</span></div>
     <div class="flex-between"><span class="muted">单请求并发上限</span><span class="mono">${run.max_concurrent || '不限'}</span></div>
   `;
 
   const stopBtn = document.getElementById('erd-stop-btn') as HTMLButtonElement;
-  stopBtn.style.display = (run.status === 'RUNNING' || run.status === 'PENDING') ? 'inline-flex' : 'none';
-  stopBtn.onclick = () => confirmAction('停止评测执行', `将取消所有未完成用例的任务，「${run.name}」将被置为 STOPPED，此操作不可撤销。`, async () => {
+  const canWriteRun = canWriteProject();
+  stopBtn.style.display = (canWriteRun && (run.status === 'RUNNING' || run.status === 'PENDING')) ? 'inline-flex' : 'none';
+  stopBtn.onclick = () => {
+    if (!requireWriteProject('停止评测执行')) return;
+    confirmAction('停止评测执行', `将取消所有未完成用例的任务，「${run.name}」将被置为 STOPPED，此操作不可撤销。`, async () => {
     try {
       await evalRunsApi.stop(id);
       cache.evalRuns = null;
@@ -280,8 +349,13 @@ export async function openEvalRunDetail(id: string): Promise<void> {
     } catch (e) {
       toastError('停止失败', e);
     }
-  });
-  (document.getElementById('erd-delete-btn') as HTMLButtonElement).onclick = () => confirmAction('删除评测执行', `将永久删除「${run.name}」及其所有用例执行记录。`, async () => {
+    });
+  };
+  const deleteBtn = document.getElementById('erd-delete-btn') as HTMLButtonElement;
+  deleteBtn.style.display = canWriteRun ? '' : 'none';
+  deleteBtn.onclick = () => {
+    if (!requireWriteProject('删除评测执行')) return;
+    confirmAction('删除评测执行', `将永久删除「${run.name}」及其所有用例执行记录。`, async () => {
     try {
       await evalRunsApi.remove(id);
       cache.evalRuns = null;
@@ -290,14 +364,26 @@ export async function openEvalRunDetail(id: string): Promise<void> {
     } catch (e) {
       toastError('删除失败', e);
     }
-  });
+    });
+  };
 
   const executions = run.case_executions || [];
   renderScoreSection(scoreSummary, executions);
   renderEvalRunCaseTable(run, executions);
 }
 
-function evalRunCaseRowHtml(ce: CaseExecution, selected: boolean): string {
+function canReEvalCase(ce: CaseExecution): boolean {
+  if (!ce.test_task_id) return false;
+  return ce.status === 'REPORTED' || ce.status === 'ERROR' || ce.status === 'STOPPED' || ce.status === 'TEST_DONE';
+}
+
+function evalRunCaseRowHtml(ce: CaseExecution, selected: boolean, showReEval: boolean): string {
+  const reportCell = canOpenCaseReport(ce)
+    ? `<span class="link-inline" data-open-report="${ce.id}"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h5"/></svg>${ce.report ? '报告' : '失败详情'}</span>`
+    : '<span class="muted">--</span>';
+  const reEvalCell = showReEval && canReEvalCase(ce)
+    ? `<span class="link-inline" data-reeval="${ce.id}" title="不重跑测试，用最新题面/校验点/Prompt 重新判分"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4v6h6"/><path d="M23 20v-6h-6"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg>重新评测</span>`
+    : '<span class="muted">--</span>';
   return `<tr data-ce="${ce.id}">
       <td><input type="checkbox" class="erd-row-check" data-ce-check="${ce.id}" ${selected ? 'checked' : ''}></td>
       <td class="case-idx">${String(ce.order_no).padStart(2, '0')}</td>
@@ -307,7 +393,8 @@ function evalRunCaseRowHtml(ce: CaseExecution, selected: boolean): string {
       <td>${issueTagsHtml(ce.issue_tags)}</td>
       <td><span class="link-inline" data-open-artifacts="${ce.id}"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16v14H4z"/><path d="M4 6l8 6 8-6"/></svg>查看产物</span></td>
       <td>${ce.test_task_id ? `<span class="link-inline" data-open-trace="${ce.id}"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>查看 trace</span>` : '<span class="muted">--</span>'}</td>
-      <td>${canOpenCaseReport(ce) ? `<span class="link-inline" data-open-report="${ce.id}"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h5"/></svg>${ce.report ? '报告' : '失败详情'}</span>` : ''}</td>
+      <td>${reportCell}</td>
+      <td>${reEvalCell}</td>
     </tr>`;
 }
 
@@ -323,6 +410,8 @@ function renderEvalRunCaseTable(run: EvalRun, executions: CaseExecution[]): void
   const seq = ++evalRunTableRenderSeq;
   const tbody = document.getElementById('erd-case-table-body')!;
   const exportBtn = document.getElementById('erd-export-btn') as HTMLButtonElement;
+  const canExportArtifacts = hasPermission('eval_run:export') && hasPermission('file:download') && canDownloadProject();
+  exportBtn.style.display = canExportArtifacts ? 'inline-flex' : 'none';
   const selCountEl = document.getElementById('erd-selected-count') as HTMLElement;
   const selectAllBox = document.getElementById('erd-select-all') as HTMLInputElement;
   const byId = new Map(executions.map(ce => [ce.id, ce]));
@@ -356,9 +445,31 @@ function renderEvalRunCaseTable(run: EvalRun, executions: CaseExecution[]): void
     exportArtifactsZip(run, executions.filter(ce => selectedIds.has(ce.id)));
   };
 
+  const showReEval = canWriteProject() && hasPermission('eval_run:create');
   const offArtifacts = delegate(tbody, '[data-open-artifacts]', (el, e) => { e.stopPropagation(); openArtifactsDrawer(run, el.getAttribute('data-open-artifacts')!); });
   const offTrace = delegate(tbody, '[data-open-trace]', (el, e) => { e.stopPropagation(); openTraceDrawer(run, el.getAttribute('data-open-trace')!); });
   const offReport = delegate(tbody, '[data-open-report]', (el, e) => { e.stopPropagation(); openReportDrawer(run, el.getAttribute('data-open-report')!); });
+  const offReEval = delegate(tbody, '[data-reeval]', (el, e) => {
+    e.stopPropagation();
+    if (!requireWriteProject('重新评测')) return;
+    const ceId = el.getAttribute('data-reeval') || '';
+    const ce = byId.get(ceId);
+    if (!ce) return;
+    confirmAction(
+      '重新评测',
+      `将保留「${ce.case_name}」的测试产物，用更新后的标准重新判分。`,
+      async () => {
+        try {
+          await evalRunsApi.reeval(run.id, ceId);
+          cache.evalRuns = null;
+          toast('已排队重新评测');
+          openEvalRunDetail(run.id);
+        } catch (err) {
+          toastError('重新评测失败', err);
+        }
+      },
+    );
+  });
   const rowClick = (e: MouseEvent) => {
     const target = e.target as HTMLElement;
     const checkbox = target.closest<HTMLInputElement>('.erd-row-check');
@@ -370,7 +481,7 @@ function renderEvalRunCaseTable(run: EvalRun, executions: CaseExecution[]): void
       refreshSelection();
       return;
     }
-    if (target.closest('[data-open-artifacts],[data-open-trace],[data-open-report]')) return;
+    if (target.closest('[data-open-artifacts],[data-open-trace],[data-open-report],[data-reeval]')) return;
     const row = target.closest<HTMLTableRowElement>('tr[data-ce]');
     if (!row) return;
     const ce = byId.get(row.getAttribute('data-ce') || '');
@@ -382,6 +493,7 @@ function renderEvalRunCaseTable(run: EvalRun, executions: CaseExecution[]): void
     offArtifacts();
     offTrace();
     offReport();
+    offReEval();
     tbody.removeEventListener('click', rowClick);
     selectAllBox.onclick = null;
     exportBtn.onclick = null;
@@ -391,8 +503,8 @@ function renderEvalRunCaseTable(run: EvalRun, executions: CaseExecution[]): void
     container: tbody,
     items: executions,
     chunkSize: 40,
-    emptyHtml: `<tr><td colspan="9">${emptyStateHtml('暂无用例执行记录', '')}</td></tr>`,
-    renderItem: ce => evalRunCaseRowHtml(ce, selectedIds.has(ce.id)),
+    emptyHtml: `<tr><td colspan="10">${emptyStateHtml('暂无用例执行记录', '')}</td></tr>`,
+    renderItem: ce => evalRunCaseRowHtml(ce, selectedIds.has(ce.id), showReEval),
     afterRender: () => {
       if (seq !== evalRunTableRenderSeq) return;
       syncRenderedCheckboxes();
@@ -401,7 +513,7 @@ function renderEvalRunCaseTable(run: EvalRun, executions: CaseExecution[]): void
   });
   evalRunTableRenderCancel = renderJob.cancel;
   renderJob.done.catch(e => {
-    if (seq === evalRunTableRenderSeq) tbody.innerHTML = `<tr><td colspan="9">${errorStateHtml(errMsg(e))}</td></tr>`;
+    if (seq === evalRunTableRenderSeq) tbody.innerHTML = `<tr><td colspan="10">${errorStateHtml(errMsg(e))}</td></tr>`;
   });
   refreshSelection();
 }

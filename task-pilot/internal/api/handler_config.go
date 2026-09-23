@@ -29,7 +29,7 @@ func (h *ConfigHandler) toResponse(ep *model.TargetEndpoint) EndpointResponse {
 }
 
 func (h *ConfigHandler) List(c *gin.Context) {
-	eps, err := h.cfg.ListEndpoints()
+	eps, err := h.cfg.ListEndpoints(CurrentProjectID(c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
 		return
@@ -42,7 +42,7 @@ func (h *ConfigHandler) List(c *gin.Context) {
 }
 
 func (h *ConfigHandler) Get(c *gin.Context) {
-	ep, err := h.cfg.GetEndpoint(c.Param("id"))
+	ep, err := h.cfg.GetEndpointInProject(CurrentProjectID(c), c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusNotFound, ErrorResponse{Error: err.Error()})
 		return
@@ -56,7 +56,7 @@ func (h *ConfigHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, ErrorResponse{Error: err.Error()})
 		return
 	}
-	ep, err := h.cfg.CreateEndpoint(service.UpsertEndpointInput{
+	ep, err := h.cfg.CreateEndpoint(CurrentProjectID(c), service.UpsertEndpointInput{
 		Name:      req.Name,
 		BaseURL:   req.BaseURL,
 		ModelName: req.ModelName,
@@ -76,7 +76,7 @@ func (h *ConfigHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, ErrorResponse{Error: err.Error()})
 		return
 	}
-	ep, err := h.cfg.UpdateEndpoint(c.Param("id"), service.UpsertEndpointInput{
+	ep, err := h.cfg.UpdateEndpoint(CurrentProjectID(c), c.Param("id"), service.UpsertEndpointInput{
 		Name:      req.Name,
 		BaseURL:   req.BaseURL,
 		ModelName: req.ModelName,
@@ -91,7 +91,7 @@ func (h *ConfigHandler) Update(c *gin.Context) {
 }
 
 func (h *ConfigHandler) Delete(c *gin.Context) {
-	if err := h.cfg.DeleteEndpoint(c.Param("id")); err != nil {
+	if err := h.cfg.DeleteEndpoint(CurrentProjectID(c), c.Param("id")); err != nil {
 		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
 		return
 	}

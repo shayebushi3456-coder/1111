@@ -5,7 +5,14 @@ import { downloadConfigForMember, iconTypeOf, isInternalArtifactMember, looksBin
 import { escapeAttr, escapeHtml, emptyStateHtml, errorStateHtml, fmtSize, skeletonRows } from '@/lib/ui';
 import { renderJSON, renderMarkdown } from '@/lib/renderers';
 import { errMsg, toast } from '@/core/feedback';
+import { hasPermission } from '@/core/auth';
+import { canDownload as canDownloadProject } from '@/core/project';
 import type { CaseExecution, EvalRun, FileResponse, TarMember, TraceEvent, TraceItem, TraceItemKind, TraceUsage } from '@/types';
+
+/** 综合平台权限（file:download）与项目权限（游客/非成员不可下载）判定是否可下载/导出。 */
+function canDownloadFile(): boolean {
+  return hasPermission('file:download') && canDownloadProject();
+}
 
 export async function fetchTaskMembers(taskId: string): Promise<{ artifact: FileResponse; members: TarMember[] } | null> {
   const artifacts = await filesApi.listArtifacts(taskId);
@@ -103,6 +110,8 @@ export function openDrawer(title: string, sub: string, bodyHtml: string, iconTyp
   currentDownload = typeof download === 'string'
     ? { url: download }
     : (download ?? null);
+  const downloadBtn = document.getElementById('drawer-download-btn') as HTMLElement;
+  downloadBtn.style.display = currentDownload && canDownloadFile() ? 'inline-flex' : 'none';
   overlay.classList.add('open'); drawer.classList.add('open');
   refreshDrawerBackButton();
 }
@@ -142,10 +151,13 @@ drawerResizer.addEventListener('pointerdown', (e) => {
 });
 
 function directDownloadHtml(title: string, desc: string, buttonText: string): string {
+  const button = hasPermission('file:download') && canDownloadProject()
+    ? `<button class="btn btn-primary" id="drawer-inline-download" style="margin-top:12px;">${escapeHtml(buttonText)}</button>`
+    : `<p class="muted" style="margin-top:12px;">游客只读模式不支持下载，请登录后操作。</p>`;
   return `<div class="empty-state">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16"/></svg>
     <h4>${escapeHtml(title)}</h4><p>${escapeHtml(desc)}</p>
-    <button class="btn btn-primary" id="drawer-inline-download" style="margin-top:12px;">${escapeHtml(buttonText)}</button>
+    ${button}
   </div>`;
 }
 
@@ -248,18 +260,19 @@ function artifactStageHtml(stage: ArtifactStageView): string {
     const reason = stage.members.length === 0 ? '压缩包为空。' : `已隐藏 ${hiddenCount} 个内部文件。`;
     return `<div class="section-title">${escapeHtml(stage.label)}</div><p class="muted" style="padding:0 18px 10px;font-size:12.5px;">无可展示文件，${reason}</p>`;
   }
+  const canDownload = canDownloadFile();
   return `<div class="section-title artifact-section-title">
       <span>${escapeHtml(stage.label)}</span>
-      <button class="btn btn-ghost btn-sm" data-stage-export="${escapeAttr(stage.key)}">打包导出</button>
+      ${canDownload ? `<button class="btn btn-ghost btn-sm" data-stage-export="${escapeAttr(stage.key)}">打包导出</button>` : ''}
     </div>
     <div class="file-tree">
       ${stage.visibleMembers.map((m, i) => `<div class="file-row artifact-file-row" data-stage="${escapeAttr(stage.key)}" data-member-preview="${i}">
         ${fileRowIcon(iconTypeOf(m.name))}
         <span class="fname">${escapeHtml(m.name)}</span>
         <span class="fsize mono">${fmtSize(m.size)}</span>
-        <button class="icon-btn artifact-download-btn" title="下载单文件" data-stage="${escapeAttr(stage.key)}" data-member-download="${i}">
+        ${canDownload ? `<button class="icon-btn artifact-download-btn" title="下载单文件" data-stage="${escapeAttr(stage.key)}" data-member-download="${i}">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16"/></svg>
-        </button>
+        </button>` : ''}
       </div>`).join('')}
     </div>`;
 }

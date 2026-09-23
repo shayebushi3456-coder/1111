@@ -14,6 +14,9 @@ import (
 )
 
 type CreateTaskInput struct {
+	// ProjectID 任务归属项目。由调用方（EvalService 派发测试/评测任务时取 run.ProjectID；
+	// 直接创建任务的 API 取当前项目上下文）显式传入。
+	ProjectID       string
 	RequestID       string
 	Name            string
 	Namespace       string
@@ -68,6 +71,7 @@ func (s *TaskService) CreateTask(ctx context.Context, req CreateTaskInput) (*mod
 	}
 	task := &model.Task{
 		ID:              taskID,
+		ProjectID:       req.ProjectID,
 		RequestID:       requestID,
 		Name:            req.Name,
 		Namespace:       namespace,
@@ -99,9 +103,19 @@ func (s *TaskService) CreateTask(ctx context.Context, req CreateTaskInput) (*mod
 	return s.GetTask(task.ID)
 }
 
+// GetTask 按 ID 查询，不做项目归属校验，供内部（调度器、执行器 Token 校验等）使用。
 func (s *TaskService) GetTask(id string) (*model.Task, error) {
 	var task model.Task
 	if err := s.db.First(&task, "id = ?", id).Error; err != nil {
+		return nil, err
+	}
+	return &task, nil
+}
+
+// GetTaskInProject 按 ID+projectID 查询，供 API 边界使用，防止跨项目通过 ID 越权访问。
+func (s *TaskService) GetTaskInProject(projectID, id string) (*model.Task, error) {
+	var task model.Task
+	if err := s.db.First(&task, "id = ? AND project_id = ?", id, projectID).Error; err != nil {
 		return nil, err
 	}
 	return &task, nil
@@ -121,16 +135,16 @@ func (s *TaskService) ValidateTaskToken(taskID, token string) error {
 	return nil
 }
 
-func (s *TaskService) ListTasks() ([]model.Task, error) {
+func (s *TaskService) ListTasks(projectID string) ([]model.Task, error) {
 	var tasks []model.Task
-	if err := s.db.Order("created_at desc").Limit(100).Find(&tasks).Error; err != nil {
+	if err := s.db.Where("project_id = ?", projectID).Order("created_at desc").Limit(100).Find(&tasks).Error; err != nil {
 		return nil, err
 	}
 	return tasks, nil
 }
 
-func (s *TaskService) CancelTask(ctx context.Context, id string) (*model.Task, error) {
-	task, err := s.GetTask(id)
+func (s *TaskService) CancelTask(ctx context.Context, projectID, id string) (*model.Task, error) {
+	task, err := s.GetTaskInProject(projectID, id)
 	if err != nil {
 		return nil, err
 	}
@@ -145,15 +159,16 @@ func (s *TaskService) CancelTask(ctx context.Context, id string) (*model.Task, e
 	if err := s.db.Model(task).Updates(updates).Error; err != nil {
 		return nil, err
 	}
-	return s.GetTask(id)
+	return s.GetTaskInProject(projectID, id)
 }
 
-func (s *TaskService) RetryTask(ctx context.Context, id string) (*model.Task, error) {
-	old, err := s.GetTask(id)
+func (s *TaskService) RetryTask(ctx context.Context, projectID, id string) (*model.Task, error) {
+	old, err := s.GetTaskInProject(projectID, id)
 	if err != nil {
 		return nil, err
 	}
 	return s.CreateTask(ctx, CreateTaskInput{
+		ProjectID:      projectID,
 		Name:           old.Name + "-retry",
 		Namespace:      old.Namespace,
 		Image:          old.Image,
@@ -163,8 +178,8 @@ func (s *TaskService) RetryTask(ctx context.Context, id string) (*model.Task, er
 	})
 }
 
-func (s *TaskService) LogsSummary(ctx context.Context, id string) (map[string]any, error) {
-	task, err := s.GetTask(id)
+func (s *TaskService) LogsSummary(ctx context.Context, projectID, id string) (map[string]any, error) {
+	task, err := s.GetTaskInProject(projectID, id)
 	if err != nil {
 		return nil, err
 	}

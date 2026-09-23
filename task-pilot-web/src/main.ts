@@ -8,10 +8,15 @@ import { escapeHtml, emptyStateHtml, errorStateHtml, fmtTime, skeletonRows } fro
 import { badgeHtml, CASE_STATUS_MAP, RUN_STATUS_MAP } from '@/lib/status';
 import { HashRouter, navKeyOf, type AppView } from '@/core/router';
 import { bindModalCloseHandlers, errMsg } from '@/core/feedback';
-import { loadCaseSets, loadEvalRuns } from '@/core/dataCache';
+import { clearAllCaches, loadCaseSets, loadEvalRuns } from '@/core/dataCache';
 import { disposeEvalRunCaseTable, initEvalRunPages, openEvalRunDetail, openNewEvalRunModal, openNewEvalRunModalFor, renderEvalRunList, renderLeaderboard } from '@/pages/evalRuns';
 import { initCaseSetPages, openCaseSetDetail, renderCaseSetGrid } from '@/pages/caseSets';
-import { renderEndpointList, renderMCPConfigList, renderPromptGrid, renderSkillConfigGrid } from '@/pages/config';
+import { renderEndpointList, renderMCPConfigList, renderPrestartScriptList, renderPromptGrid, renderRuntimeEnvConfigList, renderSkillConfigGrid } from '@/pages/config';
+import { initAuthUI } from '@/core/authUi';
+import { onAuthChange, isAdmin, currentUser } from '@/core/auth';
+import { initAdminUsersPage, renderAdminUsers } from '@/pages/admin/users';
+import { initProjectUI, leaveProject, renderProjectManage, renderWorkspaceHome } from '@/pages/projects';
+import { hasEnteredProject, markProjectEntered, onProjectContextChange, refreshProjects } from '@/core/project';
 import type { CaseSet, EvalRun } from '@/types';
 
 // ---------------- Theme ----------------
@@ -36,6 +41,7 @@ const navItems = document.querySelectorAll('.nav-item[data-view]');
 const crumbs = document.getElementById('crumbs')!;
 const state: { evalRunId: string | null; caseSetId: string | null } = { evalRunId: null, caseSetId: null };
 let appRouter: HashRouter;
+let currentRoute: { view: AppView; param?: string } | null = null;
 
 function showView(name: AppView, crumbHtml?: string): void {
   views.forEach(v => v.classList.toggle('active', v.id === 'view-' + name));
@@ -64,7 +70,20 @@ function routeTo(view: AppView, param?: string): void {
 
 function renderRoute(view: AppView, param?: string): void {
   if (view !== 'evalrun-detail') disposeEvalRunCaseTable();
+  currentRoute = { view, param };
+  // 项目内视图必须先进入项目；未进入时统一回退到工作区首页。
+  const projectScopedViews: AppView[] = [
+    'dashboard', 'evalruns', 'evalrun-detail', 'casesets', 'caseset-detail',
+    'target-endpoints', 'eval-endpoints', 'prompts', 'leaderboard',
+    'mcp-servers', 'skills', 'runtime-envs', 'prestart-scripts', 'project-manage',
+  ];
+  if (view !== 'workspace-home' && view !== 'admin-users' && projectScopedViews.includes(view) && !hasEnteredProject()) {
+    routeTo('workspace-home');
+    return;
+  }
+  updateShellForRoute(view);
   switch (view) {
+    case 'workspace-home': showView('workspace-home', '<b>项目空间</b>'); renderWorkspaceHome(); break;
     case 'dashboard': showView('dashboard', '<b>概览</b>'); renderDashboard(); break;
     case 'evalruns': showView('evalruns', '<b>评测执行</b>'); renderEvalRunList(); break;
     case 'evalrun-detail': param ? openEvalRunDetail(param) : routeTo('evalruns'); break;
@@ -76,12 +95,69 @@ function renderRoute(view: AppView, param?: string): void {
     case 'leaderboard': showView('leaderboard', '<b>模型 Leaderboard</b>'); renderLeaderboard('30d'); break;
     case 'mcp-servers': showView('mcp-servers', '<b>配置中心</b> / MCP 服务器'); renderMCPConfigList(); break;
     case 'skills': showView('skills', '<b>配置中心</b> / Skill'); renderSkillConfigGrid(); break;
+    case 'runtime-envs': showView('runtime-envs', '<b>配置中心</b> / 运行环境变量'); renderRuntimeEnvConfigList(); break;
+    case 'prestart-scripts': showView('prestart-scripts', '<b>配置中心</b> / 前置脚本'); renderPrestartScriptList(); break;
+    case 'admin-users': showView('admin-users', '<b>管理</b> / 用户管理'); renderAdminUsers(); break;
+    case 'project-manage': showView('project-manage', '<b>项目管理</b>'); renderProjectManage(); break;
   }
+}
+
+/** 根据当前路由是否处于项目内视图，切换侧边栏和顶栏的可见性。 */
+function updateShellForRoute(view: AppView): void {
+  const entered = view !== 'workspace-home';
+  document.querySelectorAll<HTMLElement>('[data-project-scoped]').forEach(el => {
+    el.style.display = entered ? '' : 'none';
+  });
+  const leaveBtn = document.getElementById('btn-leave-project');
+  if (leaveBtn) (leaveBtn as HTMLElement).style.display = entered && view !== 'admin-users' ? '' : 'none';
 }
 
 appRouter = new HashRouter(({ view, param }) => renderRoute(view, param));
 initEvalRunPages({ routeTo, showView, setCrumbs: html => { crumbs.innerHTML = html; } });
 initCaseSetPages({ routeTo, showView, setCrumbs: html => { crumbs.innerHTML = html; }, openNewEvalRunModalFor });
+initAdminUsersPage();
+initAuthUI();
+initProjectUI({ routeTo });
+
+// 登录/退出后：刷新可见项目；退出则回项目空间首页（顶栏/侧栏由 authUi 负责）。
+let prevAuthUserId: string | null | undefined;
+onAuthChange(() => {
+  const uid = currentUser()?.id ?? null;
+  const loggedOut = prevAuthUserId != null && uid == null;
+  const ready = prevAuthUserId !== undefined;
+  prevAuthUserId = uid;
+
+  clearAllCaches();
+  void refreshProjects()
+    .catch(() => undefined)
+    .finally(() => {
+      if (!ready) {
+        // 首次 /auth/me：只同步当前路由，不强制跳首页。
+        if (currentRoute) renderRoute(currentRoute.view, currentRoute.param);
+        return;
+      }
+      if (loggedOut || (currentRoute?.view === 'admin-users' && !isAdmin())) {
+        markProjectEntered(false);
+        routeTo('workspace-home');
+        return;
+      }
+      if (currentRoute) renderRoute(currentRoute.view, currentRoute.param);
+    });
+});
+
+// 顶栏「返回项目列表」按钮：退出当前项目并回到工作区首页。
+document.getElementById('btn-leave-project')?.addEventListener('click', () => {
+  markProjectEntered(false);
+  leaveProject();
+});
+
+// 切换项目空间时清空跨视图数据缓存，并重新渲染当前项目内视图，避免残留上一个项目的数据。
+onProjectContextChange(() => {
+  clearAllCaches();
+  if (currentRoute && currentRoute.view !== 'workspace-home' && currentRoute.view !== 'admin-users') {
+    renderRoute(currentRoute.view, currentRoute.param);
+  }
+});
 
 // ================= DASHBOARD =================
 async function renderDashboard(): Promise<void> {
@@ -182,12 +258,6 @@ async function renderDashboard(): Promise<void> {
     }).join('');
   }
 }
-
-// ---------------- Global search (client-side filter demo) ----------------
-document.getElementById('global-search')!.addEventListener('input', (e) => {
-  const q = (e.target as HTMLInputElement).value.trim();
-  if (!q) return;
-});
 
 // ---------------- Init ----------------
 appRouter.start();

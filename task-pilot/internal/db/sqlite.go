@@ -43,6 +43,8 @@ func Open(path string) (*gorm.DB, error) {
 	sqlDB.SetMaxIdleConns(1)
 
 	if err := database.AutoMigrate(
+		&model.Project{},
+		&model.ProjectMember{},
 		&model.Task{},
 		&model.FileObject{},
 		&model.CaseSet{},
@@ -55,6 +57,9 @@ func Open(path string) (*gorm.DB, error) {
 		&model.EvalPrompt{},
 		&model.MCPConfig{},
 		&model.SkillConfig{},
+		&model.RuntimeEnvConfig{},
+		&model.User{},
+		&model.UserSession{},
 	); err != nil {
 		return nil, err
 	}

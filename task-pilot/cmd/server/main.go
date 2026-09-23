@@ -31,17 +31,35 @@ func main() {
 	fileService := filetransfer.NewService(database, cfg.FileTransfer)
 	configService := service.NewConfigService(database, cfg)
 	evalEndpointService := service.NewEvalEndpointService(database, cfg)
-	if err := evalEndpointService.SeedDefault(); err != nil {
-		log.Printf("seed default eval endpoint failed: %v", err)
-	}
 	caseSetService := service.NewCaseSetService(database)
 	promptService := service.NewPromptService(database)
-	if err := promptService.SeedDefault(); err != nil {
-		log.Printf("seed default eval prompt failed: %v", err)
-	}
 	mcpConfigService := service.NewMCPConfigService(database)
 	skillConfigService := service.NewSkillConfigService(database)
-	evalService := service.NewEvalService(database, cfg, taskService, caseSetService, configService, evalEndpointService, fileService, promptService, mcpConfigService, skillConfigService)
+	runtimeEnvConfigService := service.NewRuntimeEnvConfigService(database, cfg)
+	authService := service.NewAuthService(database)
+	if err := authService.BootstrapAdmin(); err != nil {
+		log.Printf("bootstrap admin failed: %v", err)
+	}
+	userAdminService := service.NewUserAdminService(database)
+
+	// 项目空间：先保证默认项目 IO-Eval 存在并把历史空 project_id 数据回填到该项目，
+	// 同时把平台 bootstrap 管理员 ioadmin 设为默认项目的 owner；随后才能用默认项目 ID
+	// 去做 eval-endpoint / eval-prompt 的按项目 SeedDefault（这两者依赖已存在的项目行）。
+	projectService := service.NewProjectService(database)
+	if err := projectService.SeedDefaultAndBackfill("ioadmin"); err != nil {
+		log.Printf("seed default project and backfill failed: %v", err)
+	}
+	defaultProjectID, err := projectService.DefaultProjectID()
+	if err != nil {
+		log.Fatalf("resolve default project id failed: %v", err)
+	}
+	if err := evalEndpointService.SeedDefault(defaultProjectID); err != nil {
+		log.Printf("seed default eval endpoint failed: %v", err)
+	}
+	if err := promptService.SeedDefault(defaultProjectID); err != nil {
+		log.Printf("seed default eval prompt failed: %v", err)
+	}
+	evalService := service.NewEvalService(database, cfg, taskService, caseSetService, configService, evalEndpointService, fileService, promptService, mcpConfigService, skillConfigService, runtimeEnvConfigService)
 	interval := time.Duration(cfg.Scheduler.ReconcileIntervalSeconds) * time.Second
 	if interval <= 0 {
 		interval = 10 * time.Second
@@ -54,6 +72,9 @@ func main() {
 
 	router := api.NewRouter(
 		api.NewHandler(taskService, fileService),
+		api.NewAuthHandler(authService),
+		api.NewAdminHandler(userAdminService),
+		authService,
 		api.NewConfigHandler(configService),
 		api.NewEvalEndpointHandler(evalEndpointService),
 		api.NewCaseSetHandler(caseSetService),
@@ -62,6 +83,9 @@ func main() {
 		api.NewLeaderboardHandler(evalService),
 		api.NewMCPConfigHandler(mcpConfigService),
 		api.NewSkillConfigHandler(skillConfigService),
+		api.NewRuntimeEnvConfigHandler(runtimeEnvConfigService),
+		api.NewProjectHandler(projectService),
+		projectService,
 	)
 	log.Printf("task-pilot listening on %s", cfg.Server.Addr)
 	if err := router.Run(cfg.Server.Addr); err != nil {

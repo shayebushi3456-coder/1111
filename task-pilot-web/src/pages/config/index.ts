@@ -2,14 +2,22 @@ import { targetEndpointsApi, evalEndpointsApi } from '@/api/endpoints';
 import { promptsApi } from '@/api/prompts';
 import { mcpConfigsApi } from '@/api/mcpConfigs';
 import { skillConfigsApi } from '@/api/skillConfigs';
+import { runtimeEnvConfigsApi } from '@/api/runtimeEnvConfigs';
+import { filesApi } from '@/api/files';
 import { escapeHtml, emptyStateHtml, errorStateHtml, fmtTime, skeletonRows } from '@/lib/ui';
 import { setupMarkdownEditor } from '@/lib/richEditor';
-import { cache, loadEvalEndpoints, loadMCPConfigs, loadPrompts, loadSkillConfigs, loadTargetEndpoints } from '@/core/dataCache';
+import { cache, loadEvalEndpoints, loadMCPConfigs, loadPrompts, loadRuntimeEnvConfigs, loadSkillConfigs, loadTargetEndpoints } from '@/core/dataCache';
 import { closeModal, confirmAction, errMsg, openModal, toast, toastError } from '@/core/feedback';
-import type { EndpointKind, EndpointResponse, EvalPrompt, MCPConfig, SkillConfig } from '@/types';
+import { hasPermission } from '@/core/auth';
+import { canWrite as canWriteProject } from '@/core/project';
+import type { EndpointKind, EndpointResponse, EvalPrompt, FileResponse, MCPConfig, RuntimeEnvConfig, SkillConfig } from '@/types';
+
+function canWriteConfig(): boolean { return hasPermission('config:write') && canWriteProject(); }
 
 // ================= ENDPOINTS (config center) =================
 export async function renderEndpointList(kind: EndpointKind): Promise<void> {
+  const canWrite = canWriteConfig();
+  document.getElementById(kind === 'target' ? 'btn-new-target-endpoint' : 'btn-new-eval-endpoint')!.style.display = canWrite ? 'inline-flex' : 'none';
   const wrapId = kind === 'target' ? 'target-endpoint-list' : 'eval-endpoint-list';
   const wrap = document.getElementById(wrapId)!;
   wrap.innerHTML = skeletonRows(3);
@@ -32,10 +40,10 @@ export async function renderEndpointList(kind: EndpointKind): Promise<void> {
         <div class="row-sub" style="max-width:260px;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(e.base_url)}</div>
       </div>
       <div class="mono row-sub">${escapeHtml(e.api_key_masked)}</div>
-      <div>${e.is_default ? '<span class="badge ok">默认</span>' : '<button class="btn btn-ghost btn-sm" data-set-default="' + e.id + '" data-kind="' + kind + '">设为默认</button>'}</div>
+      <div>${!canWrite ? '<span class="badge ash">只读</span>' : e.is_default ? '<span class="badge ok">默认</span>' : '<button class="btn btn-ghost btn-sm" data-set-default="' + e.id + '" data-kind="' + kind + '">设为默认</button>'}</div>
       <div class="flex gap-8">
-        <button class="icon-btn" style="width:28px;height:28px;" data-edit-ep="${e.id}" data-kind="${kind}" title="编辑"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/></svg></button>
-        <button class="icon-btn" style="width:28px;height:28px;color:var(--err);border-color:var(--err-soft);" data-del-ep="${e.id}" data-kind="${kind}" title="删除"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14"/></svg></button>
+        ${canWrite ? `<button class="icon-btn" style="width:28px;height:28px;" data-edit-ep="${e.id}" data-kind="${kind}" title="编辑"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/></svg></button>
+        <button class="icon-btn" style="width:28px;height:28px;color:var(--err);border-color:var(--err-soft);" data-del-ep="${e.id}" data-kind="${kind}" title="删除"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14"/></svg></button>` : '<span class="muted">--</span>'}
       </div>
     </div>
   `).join('');
@@ -120,6 +128,8 @@ document.getElementById('ep-submit')!.addEventListener('click', async () => {
 
 // ================= PROMPTS =================
 export async function renderPromptGrid(): Promise<void> {
+  const canWrite = canWriteConfig();
+  document.getElementById('btn-new-prompt')!.style.display = canWrite ? 'inline-flex' : 'none';
   const wrap = document.getElementById('prompt-grid')!;
   wrap.innerHTML = skeletonRows(3, 160);
   let prompts: EvalPrompt[];
@@ -133,13 +143,13 @@ export async function renderPromptGrid(): Promise<void> {
     <div class="panel" style="animation:fadeUp .4s cubic-bezier(.16,1,.3,1) backwards;animation-delay:${i * 50}ms">
       <div class="panel-head">
         <h3>${escapeHtml(p.name)}</h3>
-        ${p.is_default ? '<span class="badge ok">默认</span>' : `<button class="btn btn-ghost btn-sm" data-set-default-prompt="${p.id}">设为默认</button>`}
+        ${p.is_default ? '<span class="badge ok">默认</span>' : canWrite ? `<button class="btn btn-ghost btn-sm" data-set-default-prompt="${p.id}">设为默认</button>` : '<span class="badge ash">只读</span>'}
       </div>
       <div class="panel-body pad">
         <p class="mono" style="font-size:12px;color:var(--quiet);white-space:pre-wrap;max-height:120px;overflow:hidden;line-height:1.7;margin-bottom:12px;">${escapeHtml(p.content.slice(0, 220))}${p.content.length > 220 ? '…' : ''}</p>
         <div class="flex gap-8">
-          <button class="btn btn-ghost btn-sm" data-edit-prompt="${p.id}">编辑</button>
-          <button class="btn btn-ghost btn-sm" style="color:var(--err);border-color:var(--err-soft);" data-del-prompt="${p.id}">删除</button>
+          ${canWrite ? `<button class="btn btn-ghost btn-sm" data-edit-prompt="${p.id}">编辑</button>
+          <button class="btn btn-ghost btn-sm" style="color:var(--err);border-color:var(--err-soft);" data-del-prompt="${p.id}">删除</button>` : '<span class="muted">只读模式</span>'}
         </div>
       </div>
     </div>
@@ -224,6 +234,8 @@ document.getElementById('pm-submit')!.addEventListener('click', async () => {
 
 // ================= MCP SERVERS (config center) =================
 export async function renderMCPConfigList(): Promise<void> {
+  const canWrite = canWriteConfig();
+  document.getElementById('btn-new-mcp-config')!.style.display = canWrite ? 'inline-flex' : 'none';
   const wrap = document.getElementById('mcp-config-list')!;
   wrap.innerHTML = skeletonRows(3);
   let list: MCPConfig[];
@@ -242,8 +254,8 @@ export async function renderMCPConfigList(): Promise<void> {
       </div>
       <div class="mono row-sub" style="max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(m.config_json)}</div>
       <div class="flex gap-8">
-        <button class="icon-btn" style="width:28px;height:28px;" data-edit-mcp="${m.id}" title="编辑"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/></svg></button>
-        <button class="icon-btn" style="width:28px;height:28px;color:var(--err);border-color:var(--err-soft);" data-del-mcp="${m.id}" title="删除"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14"/></svg></button>
+        ${canWrite ? `<button class="icon-btn" style="width:28px;height:28px;" data-edit-mcp="${m.id}" title="编辑"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/></svg></button>
+        <button class="icon-btn" style="width:28px;height:28px;color:var(--err);border-color:var(--err-soft);" data-del-mcp="${m.id}" title="删除"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14"/></svg></button>` : '<span class="muted">只读</span>'}
       </div>
     </div>
   `).join('');
@@ -321,6 +333,8 @@ function decodeExtraFilesText(text: string): Record<string, string> {
 }
 
 export async function renderSkillConfigGrid(): Promise<void> {
+  const canWrite = canWriteConfig();
+  document.getElementById('btn-new-skill-config')!.style.display = canWrite ? 'inline-flex' : 'none';
   const wrap = document.getElementById('skill-config-grid')!;
   wrap.innerHTML = skeletonRows(3, 160);
   let list: SkillConfig[];
@@ -342,8 +356,8 @@ export async function renderSkillConfigGrid(): Promise<void> {
         <p class="row-sub" style="margin-bottom:8px;">${escapeHtml(sk.description || '--')}</p>
         <p class="mono" style="font-size:12px;color:var(--quiet);white-space:pre-wrap;max-height:120px;overflow:hidden;line-height:1.7;margin-bottom:12px;">${escapeHtml(sk.content_md.slice(0, 220))}${sk.content_md.length > 220 ? '…' : ''}</p>
         <div class="flex gap-8">
-          <button class="btn btn-ghost btn-sm" data-edit-skill="${sk.id}">编辑</button>
-          <button class="btn btn-ghost btn-sm" style="color:var(--err);border-color:var(--err-soft);" data-del-skill="${sk.id}">删除</button>
+          ${canWrite ? `<button class="btn btn-ghost btn-sm" data-edit-skill="${sk.id}">编辑</button>
+          <button class="btn btn-ghost btn-sm" style="color:var(--err);border-color:var(--err-soft);" data-del-skill="${sk.id}">删除</button>` : '<span class="muted">只读模式</span>'}
         </div>
       </div>
     </div>
@@ -400,3 +414,163 @@ document.getElementById('skill-submit')!.addEventListener('click', async () => {
   }
 });
 
+
+// ================= RUNTIME ENVS (config center) =================
+export async function renderRuntimeEnvConfigList(): Promise<void> {
+  const canWrite = canWriteConfig();
+  document.getElementById('btn-new-runtime-env')!.style.display = canWrite ? 'inline-flex' : 'none';
+  const wrap = document.getElementById('runtime-env-list')!;
+  wrap.innerHTML = skeletonRows(3);
+  let list: RuntimeEnvConfig[];
+  try {
+    list = await loadRuntimeEnvConfigs(true);
+  } catch (e) {
+    wrap.innerHTML = errorStateHtml(errMsg(e));
+    return;
+  }
+  if (list.length === 0) {
+    wrap.innerHTML = emptyStateHtml('还没有配置运行环境变量', '点击右上角新增，启用后会注入每次执行任务的 Pod。');
+    return;
+  }
+  wrap.innerHTML = list.map((it, i) => `
+    <div class="row-item" style="grid-template-columns:1.1fr 1.5fr 1fr 90px 90px;animation-delay:${i * 30}ms;cursor:default;">
+      <div>
+        <div class="row-title mono">${escapeHtml(it.key)}</div>
+        <div class="row-sub">${it.id}</div>
+      </div>
+      <div class="row-sub">${escapeHtml(it.description || '--')}</div>
+      <div class="mono row-sub" title="${escapeHtml(it.mask_value ? it.value_masked : (it.value || ''))}">${escapeHtml(it.mask_value ? (it.value_masked || '****') : (it.value || ''))}</div>
+      <div>${it.enabled ? '<span class="badge ok">启用</span>' : '<span class="badge ash">停用</span>'}${it.mask_value ? '<span class="badge ash" style="margin-left:6px;">脱敏</span>' : ''}</div>
+      <div class="flex gap-8">
+        ${canWrite ? `<button class="icon-btn" style="width:28px;height:28px;" data-edit-runtime-env="${it.id}" title="编辑"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/></svg></button>
+        <button class="icon-btn" style="width:28px;height:28px;color:var(--err);border-color:var(--err-soft);" data-del-runtime-env="${it.id}" title="删除"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14"/></svg></button>` : '<span class="muted">只读</span>'}
+      </div>
+    </div>
+  `).join('');
+  wrap.querySelectorAll('[data-edit-runtime-env]').forEach(el => el.addEventListener('click', () => openRuntimeEnvModal(el.getAttribute('data-edit-runtime-env'))));
+  wrap.querySelectorAll('[data-del-runtime-env]').forEach(el => el.addEventListener('click', () => {
+    const id = el.getAttribute('data-del-runtime-env')!;
+    confirmAction('删除运行环境变量', '删除后后续新触发的执行任务将不再注入该变量，已运行任务不受影响。', async () => {
+      try {
+        await runtimeEnvConfigsApi.remove(id);
+        cache.runtimeEnvConfigs = null;
+        renderRuntimeEnvConfigList();
+        toast('运行环境变量已删除');
+      } catch (e) {
+        toastError('删除失败', e);
+      }
+    });
+  }));
+}
+
+let runtimeEnvEditId: string | null = null;
+document.getElementById('btn-new-runtime-env')!.addEventListener('click', () => openRuntimeEnvModal(null));
+async function openRuntimeEnvModal(editId: string | null): Promise<void> {
+  runtimeEnvEditId = editId;
+  const list = editId ? await loadRuntimeEnvConfigs() : [];
+  const item = editId ? list.find(x => x.id === editId) : null;
+  document.getElementById('runtime-env-modal-title')!.textContent = item ? '编辑运行环境变量' : '新增运行环境变量';
+  (document.getElementById('runtime-env-key') as HTMLInputElement).value = item ? item.key : '';
+  (document.getElementById('runtime-env-value') as HTMLInputElement).value = '';
+  (document.getElementById('runtime-env-value') as HTMLInputElement).placeholder = item ? '留空表示保留原值' : '请输入变量值';
+  (document.getElementById('runtime-env-desc') as HTMLInputElement).value = item ? item.description : '';
+  document.getElementById('runtime-env-mask-switch')!.classList.toggle('on', item ? item.mask_value : false);
+  document.getElementById('runtime-env-enabled-switch')!.classList.toggle('on', item ? item.enabled : true);
+  openModal('modal-runtime-env');
+}
+
+document.getElementById('runtime-env-mask-switch')!.addEventListener('click', (e) => (e.currentTarget as HTMLElement).classList.toggle('on'));
+document.getElementById('runtime-env-enabled-switch')!.addEventListener('click', (e) => (e.currentTarget as HTMLElement).classList.toggle('on'));
+document.getElementById('runtime-env-submit')!.addEventListener('click', async () => {
+  const btn = document.getElementById('runtime-env-submit') as HTMLButtonElement;
+  const key = (document.getElementById('runtime-env-key') as HTMLInputElement).value.trim();
+  const value = (document.getElementById('runtime-env-value') as HTMLInputElement).value;
+  const description = (document.getElementById('runtime-env-desc') as HTMLInputElement).value.trim();
+  const maskValue = document.getElementById('runtime-env-mask-switch')!.classList.contains('on');
+  const enabled = document.getElementById('runtime-env-enabled-switch')!.classList.contains('on');
+  if (!key) { toast('请填写变量名'); return; }
+  if (!runtimeEnvEditId && !value) { toast('请填写变量值'); return; }
+  btn.disabled = true;
+  try {
+    const body = { key, value, description, mask_value: maskValue, enabled };
+    if (runtimeEnvEditId) await runtimeEnvConfigsApi.update(runtimeEnvEditId, body);
+    else await runtimeEnvConfigsApi.create(body);
+    cache.runtimeEnvConfigs = null;
+    closeModal('modal-runtime-env');
+    renderRuntimeEnvConfigList();
+    toast(runtimeEnvEditId ? '运行环境变量已更新' : '运行环境变量已创建');
+  } catch (e) {
+    toastError('保存失败', e);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// ================= PRESTART SCRIPTS (config center) =================
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+export async function renderPrestartScriptList(): Promise<void> {
+  const canWrite = canWriteConfig();
+  document.getElementById('btn-upload-prestart-script')!.style.display = canWrite ? 'inline-flex' : 'none';
+  const wrap = document.getElementById('prestart-script-list')!;
+  wrap.innerHTML = skeletonRows(3);
+  let list: FileResponse[];
+  try {
+    list = await filesApi.listPrestart();
+  } catch (e) {
+    wrap.innerHTML = errorStateHtml(errMsg(e));
+    return;
+  }
+  if (list.length === 0) {
+    wrap.innerHTML = emptyStateHtml('还没有前置脚本', '点击右上角上传 .py 文件；新建评测执行时可选择执行。');
+    return;
+  }
+  wrap.innerHTML = list.map((f, i) => `
+    <div class="row-item" style="grid-template-columns:1.6fr 1fr 1.2fr 90px;animation-delay:${i * 30}ms;cursor:default;">
+      <div>
+        <div class="row-title mono">${escapeHtml(f.filename)}</div>
+        <div class="row-sub">${escapeHtml(f.file_id)}</div>
+      </div>
+      <div class="row-sub">${formatBytes(f.size)}</div>
+      <div class="row-sub">${f.created_at ? fmtTime(f.created_at) : '--'}</div>
+      <div>
+        ${canWrite ? `<button class="icon-btn" style="width:28px;height:28px;color:var(--err);border-color:var(--err-soft);" data-del-prestart="${escapeHtml(f.file_id)}" title="删除"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14"/></svg></button>` : '<span class="muted">只读</span>'}
+      </div>
+    </div>
+  `).join('');
+  wrap.querySelectorAll('[data-del-prestart]').forEach(el => el.addEventListener('click', () => {
+    const id = el.getAttribute('data-del-prestart')!;
+    confirmAction('删除前置脚本', '删除后新建评测执行将无法再选择该脚本；已创建的执行不受影响。', async () => {
+      try {
+        await filesApi.remove(id);
+        renderPrestartScriptList();
+        toast('脚本已删除');
+      } catch (e) {
+        toastError('删除失败', e);
+      }
+    });
+  }));
+}
+
+document.getElementById('btn-upload-prestart-script')?.addEventListener('click', () => {
+  if (!canWriteConfig()) { toast('没有配置写权限'); return; }
+  (document.getElementById('prestart-script-file-input') as HTMLInputElement).click();
+});
+document.getElementById('prestart-script-file-input')?.addEventListener('change', async (e) => {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file) return;
+  if (!file.name.toLowerCase().endsWith('.py')) { toast('请上传 .py 文件'); return; }
+  try {
+    await filesApi.uploadPrestart(file);
+    toast('脚本已上传');
+    renderPrestartScriptList();
+  } catch (err) {
+    toastError('上传失败', err);
+  }
+});

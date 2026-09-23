@@ -27,7 +27,7 @@ type UpsertSkillConfigInput struct {
 	ExtraFiles map[string]string
 }
 
-func (s *SkillConfigService) Create(in UpsertSkillConfigInput) (*model.SkillConfig, error) {
+func (s *SkillConfigService) Create(projectID string, in UpsertSkillConfigInput) (*model.SkillConfig, error) {
 	if in.Name == "" {
 		return nil, fmt.Errorf("name is required")
 	}
@@ -36,6 +36,7 @@ func (s *SkillConfigService) Create(in UpsertSkillConfigInput) (*model.SkillConf
 	}
 	sk := &model.SkillConfig{
 		ID:             util.NewID("skill"),
+		ProjectID:      projectID,
 		Name:           in.Name,
 		Description:    in.Description,
 		ContentMD:      in.ContentMD,
@@ -47,8 +48,8 @@ func (s *SkillConfigService) Create(in UpsertSkillConfigInput) (*model.SkillConf
 	return sk, nil
 }
 
-func (s *SkillConfigService) Update(id string, in UpsertSkillConfigInput) (*model.SkillConfig, error) {
-	sk, err := s.Get(id)
+func (s *SkillConfigService) Update(projectID, id string, in UpsertSkillConfigInput) (*model.SkillConfig, error) {
+	sk, err := s.GetInProject(projectID, id)
 	if err != nil {
 		return nil, err
 	}
@@ -66,6 +67,7 @@ func (s *SkillConfigService) Update(id string, in UpsertSkillConfigInput) (*mode
 	return sk, nil
 }
 
+// Get 按 ID 查询，不做项目归属校验，供内部（如按用例快照绑定的 Skill ID 批量还原配置）使用。
 func (s *SkillConfigService) Get(id string) (*model.SkillConfig, error) {
 	var sk model.SkillConfig
 	if err := s.db.First(&sk, "id = ?", id).Error; err != nil {
@@ -74,16 +76,25 @@ func (s *SkillConfigService) Get(id string) (*model.SkillConfig, error) {
 	return &sk, nil
 }
 
-func (s *SkillConfigService) List() ([]model.SkillConfig, error) {
+// GetInProject 按 ID+projectID 查询，防止跨项目通过 ID 越权访问。
+func (s *SkillConfigService) GetInProject(projectID, id string) (*model.SkillConfig, error) {
+	var sk model.SkillConfig
+	if err := s.db.First(&sk, "id = ? AND project_id = ?", id, projectID).Error; err != nil {
+		return nil, err
+	}
+	return &sk, nil
+}
+
+func (s *SkillConfigService) List(projectID string) ([]model.SkillConfig, error) {
 	var items []model.SkillConfig
-	if err := s.db.Order("created_at desc").Find(&items).Error; err != nil {
+	if err := s.db.Where("project_id = ?", projectID).Order("created_at desc").Find(&items).Error; err != nil {
 		return nil, err
 	}
 	return items, nil
 }
 
-func (s *SkillConfigService) Delete(id string) error {
-	return s.db.Delete(&model.SkillConfig{}, "id = ?", id).Error
+func (s *SkillConfigService) Delete(projectID, id string) error {
+	return s.db.Where("project_id = ?", projectID).Delete(&model.SkillConfig{}, "id = ?", id).Error
 }
 
 // GetMany 按 ID 批量查询（保持稳定顺序，跳过不存在的 ID），供派发测试任务时解析用例绑定使用。

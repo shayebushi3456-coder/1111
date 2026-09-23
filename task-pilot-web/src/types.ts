@@ -143,6 +143,27 @@ export interface UpsertSkillConfigRequest {
   extra_files: Record<string, string>;
 }
 
+// ---- 执行时环境变量配置（启用项会注入 TestTask/EvalTask Pod） ----
+export interface RuntimeEnvConfig {
+  id: string;
+  key: string;
+  description: string;
+  value?: string;
+  value_masked: string;
+  mask_value: boolean;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UpsertRuntimeEnvConfigRequest {
+  key: string;
+  value: string;
+  description: string;
+  mask_value: boolean;
+  enabled: boolean;
+}
+
 // ---- 执行任务（model.EvalRun / model.CaseExecution） ----
 
 // 机评量化解析结果状态：与 CaseExecStatus 是独立维度，分数解析失败不影响用例执行的终态判定。
@@ -223,8 +244,12 @@ export interface EvalRun {
   reported: number;
   errored: number;
   max_concurrent: number;
+  prestart_script_file_id?: string;
   test_image?: string;
   eval_image?: string;
+  test_timeout_seconds?: number;
+  eval_timeout_seconds?: number;
+  max_eval_attempts?: number;
   test_model_command?: string;
   eval_model_command?: string;
   score_prompt_version: number;
@@ -265,11 +290,17 @@ export interface CreateEvalRunRequest {
   endpoint_id?: string;
   eval_endpoint_id?: string;
   prompt_id?: string;
+  test_image?: string;
+  eval_image?: string;
+  test_timeout_seconds?: number;
+  eval_timeout_seconds?: number;
+  max_eval_attempts?: number;
   max_concurrent?: number;
+  prestart_script_file_id?: string;
 }
 
 // ---- 文件对象（model.FileObject / FileResponse） ----
-export type FilePurpose = 'input' | 'artifact';
+export type FilePurpose = 'input' | 'artifact' | 'prestart';
 
 export interface FileResponse {
   file_id: string;
@@ -277,6 +308,7 @@ export interface FileResponse {
   size: number;
   purpose: FilePurpose;
   sha256?: string;
+  created_at?: string;
 }
 
 // ---- 任务（model.Task，用于 GET /tasks/:id 查看测试/评测任务原始状态） ----
@@ -302,8 +334,97 @@ export interface TaskRecord {
 }
 
 // ---- 通用响应包裹 ----
+export type UserRole = 'guest' | 'viewer' | 'operator' | 'admin';
+export type UserStatus = 'pending' | 'active' | 'rejected' | 'disabled';
+
+export interface User {
+  id: string;
+  username: string;
+  display_name: string;
+  email: string;
+  role: Exclude<UserRole, 'guest'>;
+  status: UserStatus;
+  created_at: string;
+  updated_at: string;
+  last_login_at?: string | null;
+}
+
+export interface AuthMeResponse {
+  user: User | null;
+  role: UserRole;
+  permissions: string[];
+}
+
+export interface UserListResponse {
+  users: User[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
 export interface ErrorResponse {
   error: string;
+  code?: string;
+  permission?: string;
+}
+
+/* ------------------------------------------------------------
+   项目空间（model.Project / model.ProjectMember）
+   公开性：public（任何人含游客只读）/ private（仅成员；默认可分享）。
+   角色固定三档：owner（管理）、editor（编辑）、viewer（只读+可导出）。
+   平台 admin 拥有等同 owner 的超级权限。
+   ------------------------------------------------------------ */
+export type ProjectVisibility = 'public' | 'private';
+export type ProjectRole = 'owner' | 'editor' | 'viewer';
+
+export interface ProjectMember {
+  id: string;
+  project_id: string;
+  user_id: string;
+  role: ProjectRole;
+  created_at: string;
+  updated_at?: string;
+  username?: string;
+  display_name?: string;
+}
+
+export interface Project {
+  id: string;
+  name: string;
+  description: string;
+  visibility: ProjectVisibility;
+  is_default: boolean;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  members?: ProjectMember[];
+  my_role?: ProjectRole;
+}
+
+export interface ProjectListResponse {
+  projects: Project[];
+}
+
+export interface UpsertProjectRequest {
+  name: string;
+  description: string;
+  visibility?: ProjectVisibility;
+}
+
+export interface AddProjectMemberRequest {
+  username?: string;
+  user_id?: string;
+  role: ProjectRole;
+}
+
+export interface UpdateProjectMemberRoleRequest {
+  role: ProjectRole;
+}
+
+export interface UserSearchItem {
+  id: string;
+  username: string;
+  display_name: string;
 }
 
 /* ------------------------------------------------------------

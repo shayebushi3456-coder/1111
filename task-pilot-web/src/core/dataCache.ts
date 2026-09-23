@@ -4,7 +4,8 @@ import { targetEndpointsApi, evalEndpointsApi } from '@/api/endpoints';
 import { promptsApi } from '@/api/prompts';
 import { mcpConfigsApi } from '@/api/mcpConfigs';
 import { skillConfigsApi } from '@/api/skillConfigs';
-import type { CaseSet, EndpointResponse, EvalPrompt, EvalRun, MCPConfig, SkillConfig } from '@/types';
+import { runtimeEnvConfigsApi } from '@/api/runtimeEnvConfigs';
+import type { CaseSet, EndpointResponse, EvalPrompt, EvalRun, MCPConfig, RuntimeEnvConfig, SkillConfig } from '@/types';
 
 export const cache = {
   caseSets: null as CaseSet[] | null,
@@ -14,6 +15,7 @@ export const cache = {
   prompts: null as EvalPrompt[] | null,
   mcpConfigs: null as MCPConfig[] | null,
   skillConfigs: null as SkillConfig[] | null,
+  runtimeEnvConfigs: null as RuntimeEnvConfig[] | null,
 };
 
 export async function loadCaseSets(force = false): Promise<CaseSet[]> {
@@ -56,4 +58,22 @@ export async function loadSkillConfigs(force = false): Promise<SkillConfig[]> {
   if (!force && cache.skillConfigs) return cache.skillConfigs;
   cache.skillConfigs = await skillConfigsApi.list();
   return cache.skillConfigs;
+}
+
+export async function loadRuntimeEnvConfigs(force = false): Promise<RuntimeEnvConfig[]> {
+  if (!force && cache.runtimeEnvConfigs) return cache.runtimeEnvConfigs;
+  cache.runtimeEnvConfigs = await runtimeEnvConfigsApi.list();
+  return cache.runtimeEnvConfigs;
+}
+
+/** 切换项目时清空全部跨视图缓存，避免残留上一个项目空间的数据。 */
+export function clearAllCaches(): void {
+  cache.caseSets = null;
+  cache.evalRuns = null;
+  cache.targetEndpoints = null;
+  cache.evalEndpoints = null;
+  cache.prompts = null;
+  cache.mcpConfigs = null;
+  cache.skillConfigs = null;
+  cache.runtimeEnvConfigs = null;
 }

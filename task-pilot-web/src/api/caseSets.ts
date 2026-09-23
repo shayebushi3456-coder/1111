@@ -12,6 +12,21 @@ interface CaseSetResponse {
 }
 interface CaseSetListResponse {
   case_sets: CaseSet[];
+  total?: number;
+  page?: number;
+  page_size?: number;
+}
+export interface CaseSetListQuery {
+  page?: number;
+  page_size?: number;
+  q?: string;
+}
+
+function queryString(params: CaseSetListQuery): string {
+  const qs = new URLSearchParams();
+  Object.entries(params).forEach(([k, v]) => { if (v !== undefined && v !== '') qs.set(k, String(v)); });
+  const text = qs.toString();
+  return text ? `?${text}` : '';
 }
 
 function normalizeCaseItem(item: CaseItem): CaseItem {
@@ -45,6 +60,7 @@ function normalizeCaseSetResponse(res: CaseSetResponse): CaseSet {
 
 export const caseSetsApi = {
   list: () => api.get<CaseSetListResponse>('/case-sets').then(r => r.case_sets.map(cs => normalizeCaseSet(cs))),
+  listPaged: (query: CaseSetListQuery) => api.get<CaseSetListResponse>(`/case-sets${queryString(query)}`).then(r => ({ ...r, case_sets: r.case_sets.map(cs => normalizeCaseSet(cs)) })),
   get: (id: string) => api.get<CaseSetResponse>(`/case-sets/${id}`).then(normalizeCaseSetResponse),
   create: (body: CaseSetRequestInput) => api.post<CaseSetResponse>('/case-sets', body).then(normalizeCaseSetResponse),
   update: (id: string, body: CaseSetRequestInput) => api.put<CaseSetResponse>(`/case-sets/${id}`, body).then(normalizeCaseSetResponse),

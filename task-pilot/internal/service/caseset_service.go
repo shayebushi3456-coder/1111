@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"strings"
 
 	"task-pilot/internal/model"
 	"task-pilot/internal/util"
@@ -107,13 +108,14 @@ func buildCases(caseSetID string, cases []CaseInput) []model.Case {
 }
 
 // Create 创建用例集（含用例与校验点）。
-func (s *CaseSetService) Create(in CaseSetInput) (*model.CaseSet, error) {
+func (s *CaseSetService) Create(projectID string, in CaseSetInput) (*model.CaseSet, error) {
 	if err := s.validate(in); err != nil {
 		return nil, err
 	}
 	csID := util.NewID("cs")
 	cs := &model.CaseSet{
 		ID:          csID,
+		ProjectID:   projectID,
 		Name:        in.Name,
 		Description: in.Description,
 		Version:     1,
@@ -125,7 +127,7 @@ func (s *CaseSetService) Create(in CaseSetInput) (*model.CaseSet, error) {
 	return s.Get(csID)
 }
 
-// Get 查询用例集详情（含用例与校验点）。
+// Get 查询用例集详情（含用例与校验点），不做项目归属校验，供内部（如评测调度还原快照）使用。
 func (s *CaseSetService) Get(id string) (*model.CaseSet, error) {
 	var cs model.CaseSet
 	err := s.db.Preload("Cases", func(db *gorm.DB) *gorm.DB {
@@ -147,24 +149,77 @@ func (s *CaseSetService) Get(id string) (*model.CaseSet, error) {
 	return &cs, nil
 }
 
-// List 列出用例集（预加载用例列表以便前端展示用例数量，不含校验点明细）。
-func (s *CaseSetService) List() ([]model.CaseSet, error) {
-	var sets []model.CaseSet
-	if err := s.db.Preload("Cases", func(db *gorm.DB) *gorm.DB {
-		return db.Order("order_no asc")
-	}).Order("created_at desc").Limit(100).Find(&sets).Error; err != nil {
+// GetInProject 按 ID+projectID 查询，防止跨项目通过 ID 越权访问。
+func (s *CaseSetService) GetInProject(projectID, id string) (*model.CaseSet, error) {
+	cs, err := s.Get(id)
+	if err != nil {
 		return nil, err
 	}
-	return sets, nil
+	if cs.ProjectID != projectID {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return cs, nil
+}
+
+type ListCaseSetsOptions struct {
+	ProjectID string
+	Page      int
+	PageSize  int
+	Query     string
+}
+
+type ListCaseSetsResult struct {
+	Items    []model.CaseSet
+	Total    int64
+	Page     int
+	PageSize int
+}
+
+// List 列出用例集（预加载用例列表以便前端展示用例数量，不含校验点明细）。
+func (s *CaseSetService) List(projectID string) ([]model.CaseSet, error) {
+	res, err := s.ListPaged(ListCaseSetsOptions{Page: 1, PageSize: 100, ProjectID: projectID})
+	if err != nil {
+		return nil, err
+	}
+	return res.Items, nil
+}
+
+func (s *CaseSetService) ListPaged(opts ListCaseSetsOptions) (ListCaseSetsResult, error) {
+	if opts.Page <= 0 {
+		opts.Page = 1
+	}
+	if opts.PageSize <= 0 {
+		opts.PageSize = 20
+	}
+	if opts.PageSize > 100 {
+		opts.PageSize = 100
+	}
+	q := strings.TrimSpace(opts.Query)
+	db := s.db.Model(&model.CaseSet{}).Where("project_id = ?", opts.ProjectID)
+	if q != "" {
+		like := "%" + q + "%"
+		db = db.Where("name LIKE ? OR description LIKE ? OR id LIKE ?", like, like, like)
+	}
+	var total int64
+	if err := db.Count(&total).Error; err != nil {
+		return ListCaseSetsResult{}, err
+	}
+	var sets []model.CaseSet
+	if err := db.Preload("Cases", func(db *gorm.DB) *gorm.DB {
+		return db.Order("order_no asc")
+	}).Order("created_at desc").Limit(opts.PageSize).Offset((opts.Page - 1) * opts.PageSize).Find(&sets).Error; err != nil {
+		return ListCaseSetsResult{}, err
+	}
+	return ListCaseSetsResult{Items: sets, Total: total, Page: opts.Page, PageSize: opts.PageSize}, nil
 }
 
 // Update 覆盖式更新用例集：替换全部用例与校验点，并递增版本。
-func (s *CaseSetService) Update(id string, in CaseSetInput) (*model.CaseSet, error) {
+func (s *CaseSetService) Update(projectID, id string, in CaseSetInput) (*model.CaseSet, error) {
 	if err := s.validate(in); err != nil {
 		return nil, err
 	}
 	var cs model.CaseSet
-	if err := s.db.First(&cs, "id = ?", id).Error; err != nil {
+	if err := s.db.First(&cs, "id = ? AND project_id = ?", id, projectID).Error; err != nil {
 		return nil, err
 	}
 	err := s.db.Transaction(func(tx *gorm.DB) error {
@@ -195,8 +250,12 @@ func (s *CaseSetService) Update(id string, in CaseSetInput) (*model.CaseSet, err
 }
 
 // Delete 软删除用例集及其用例、校验点。
-func (s *CaseSetService) Delete(id string) error {
+func (s *CaseSetService) Delete(projectID, id string) error {
 	return s.db.Transaction(func(tx *gorm.DB) error {
+		var cs model.CaseSet
+		if err := tx.First(&cs, "id = ? AND project_id = ?", id, projectID).Error; err != nil {
+			return err
+		}
 		var cases []model.Case
 		if err := tx.Where("case_set_id = ?", id).Find(&cases).Error; err != nil {
 			return err

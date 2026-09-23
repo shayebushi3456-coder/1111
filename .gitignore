@@ -1,11 +1,14 @@
 .DS_Store
 *.zip
+tasks-db.zip
 
 task-pilot/data/
 task-pilot/bin/
 task-pilot/*.db
 task-pilot/*.db-shm
 task-pilot/*.db-wal
+task-pilot/data/*.db
+task-pilot/data/*.db-*
 task-pilot/.env
 
 task-pilot-web/node_modules/

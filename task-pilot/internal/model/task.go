@@ -26,6 +26,7 @@ type InputFileSpec struct {
 
 type Task struct {
 	ID              string         `gorm:"primaryKey;size:64" json:"id"`
+	ProjectID       string         `gorm:"index;size:64" json:"project_id"`
 	RequestID       string         `gorm:"uniqueIndex;size:128" json:"request_id"`
 	Name            string         `gorm:"size:128" json:"name"`
 	Namespace       string         `gorm:"size:128" json:"namespace"`

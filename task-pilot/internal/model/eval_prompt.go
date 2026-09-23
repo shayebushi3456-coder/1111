@@ -10,7 +10,8 @@ import (
 // EvalRun 创建时会选定一个 prompt 并将其内容快照到 run，保证历史结果可复现。
 type EvalPrompt struct {
 	ID        string         `gorm:"primaryKey;size:64" json:"id"`
-	Name      string         `gorm:"uniqueIndex;size:128" json:"name"`
+	ProjectID string         `gorm:"index;size:64" json:"project_id"`
+	Name      string         `gorm:"size:128" json:"name"`
 	Content   string         `gorm:"type:text" json:"content"`
 	IsDefault bool           `gorm:"index" json:"is_default"`
 	CreatedAt time.Time      `json:"created_at"`

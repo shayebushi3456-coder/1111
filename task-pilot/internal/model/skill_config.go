@@ -14,7 +14,8 @@ import (
 // 仅支持文本内容（不支持二进制资产），满足当前 Skill 编排需求即可，避免引入额外的文件存储依赖。
 type SkillConfig struct {
 	ID             string         `gorm:"primaryKey;size:64" json:"id"`
-	Name           string         `gorm:"uniqueIndex;size:128" json:"name"`
+	ProjectID      string         `gorm:"index;size:64" json:"project_id"`
+	Name           string         `gorm:"size:128" json:"name"`
 	Description    string         `gorm:"type:text" json:"description"`
 	ContentMD      string         `gorm:"type:text" json:"content_md"`
 	ExtraFilesJSON string         `gorm:"type:text" json:"-"`

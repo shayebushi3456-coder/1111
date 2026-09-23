@@ -1,6 +1,8 @@
 package api
 
 import (
+	"time"
+
 	"task-pilot/internal/model"
 	"task-pilot/internal/service"
 )
@@ -20,11 +22,12 @@ type TaskResponse struct {
 }
 
 type FileResponse struct {
-	FileID   string `json:"file_id"`
-	Filename string `json:"filename"`
-	Size     int64  `json:"size"`
-	Purpose  string `json:"purpose"`
-	Sha256   string `json:"sha256,omitempty"`
+	FileID    string    `json:"file_id"`
+	Filename  string    `json:"filename"`
+	Size      int64     `json:"size"`
+	Purpose   string    `json:"purpose"`
+	Sha256    string    `json:"sha256,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type ArtifactListResponse struct {
@@ -36,7 +39,9 @@ type ListTaskResponse struct {
 }
 
 type ErrorResponse struct {
-	Error string `json:"error"`
+	Error      string `json:"error"`
+	Code       string `json:"code,omitempty"`
+	Permission string `json:"permission,omitempty"`
 }
 
 // ---- 配置中心：被测模型端点 ----
@@ -100,6 +105,9 @@ type CaseSetResponse struct {
 
 type CaseSetListResponse struct {
 	CaseSets []model.CaseSet `json:"case_sets"`
+	Total    int64           `json:"total,omitempty"`
+	Page     int             `json:"page,omitempty"`
+	PageSize int             `json:"page_size,omitempty"`
 }
 
 // ---- 执行任务（EvalRun） ----
@@ -119,6 +127,11 @@ type CreateEvalRunRequest struct {
 	TestImage string `json:"test_image"`
 	// EvalImage 评测任务容器镜像。省略时使用 config.Builtin.EvalExecutorImage。
 	EvalImage string `json:"eval_image"`
+	// TestTimeoutSeconds / EvalTimeoutSeconds 分别覆盖测试/评测任务超时时间（秒）；省略/<=0 使用内置默认。
+	TestTimeoutSeconds int64 `json:"test_timeout_seconds"`
+	EvalTimeoutSeconds int64 `json:"eval_timeout_seconds"`
+	// MaxEvalAttempts EvalTask 最大尝试次数。省略/<=0 使用默认值；1 表示不重试。
+	MaxEvalAttempts int `json:"max_eval_attempts"`
 	// TestModelCommand 测试任务里执行任务描述的模型启动命令片段，例如：
 	//   "ccr code -p"、"claude -p"、"aider --model xxx -m"
 	// 服务会拼接为 `<test_model_command> '<任务描述>' --output-format stream-json --verbose > output/trace.jsonl 2>&1`。
@@ -128,6 +141,8 @@ type CreateEvalRunRequest struct {
 	// 服务会拼接为 `<eval_model_command> < prompt.txt > output/report.md`。
 	// 省略时使用 config.Builtin.DefaultEvalModelCommand（默认 "claude -p"）。
 	EvalModelCommand string `json:"eval_model_command"`
+	// PrestartScriptFileID 测试前置脚本文件 ID（purpose=prestart）；省略/空表示不执行。
+	PrestartScriptFileID string `json:"prestart_script_file_id"`
 }
 
 type EvalRunResponse struct {
@@ -137,6 +152,9 @@ type EvalRunResponse struct {
 
 type EvalRunListResponse struct {
 	EvalRuns []model.EvalRun `json:"eval_runs"`
+	Total    int64           `json:"total,omitempty"`
+	Page     int             `json:"page,omitempty"`
+	PageSize int             `json:"page_size,omitempty"`
 }
 
 // LeaderboardResponse 按被测模型端点聚合的机评排行榜。
@@ -211,3 +229,84 @@ type SkillConfigListResponse struct {
 	SkillConfigs []SkillConfigResponse `json:"skill_configs"`
 }
 
+// ---- 执行时环境变量配置 ----
+
+type RuntimeEnvConfigRequest struct {
+	Key         string `json:"key" binding:"required"`
+	Value       string `json:"value"`
+	Description string `json:"description"`
+	MaskValue   bool   `json:"mask_value"`
+	Enabled     bool   `json:"enabled"`
+}
+
+type RuntimeEnvConfigListResponse struct {
+	RuntimeEnvConfigs []model.RuntimeEnvConfig `json:"runtime_env_configs"`
+}
+
+
+// ---- 项目空间 / 项目成员 ----
+
+type CreateProjectRequest struct {
+	Name                 string `json:"name" binding:"required"`
+	Description          string `json:"description"`
+	Visibility           string `json:"visibility"` // public|private；空=private
+	PrestartScriptFileID string `json:"prestart_script_file_id"`
+}
+
+type UpdateProjectRequest struct {
+	Name                 string `json:"name"`
+	Description          string `json:"description"`
+	Visibility           string `json:"visibility"` // 空=不改
+	PrestartScriptFileID string `json:"prestart_script_file_id"`
+}
+
+type ProjectResponse struct {
+	ID                   string    `json:"id"`
+	Name                 string    `json:"name"`
+	Description          string    `json:"description"`
+	Visibility           string    `json:"visibility"`
+	IsDefault            bool      `json:"is_default"`
+	PrestartScriptFileID string    `json:"prestart_script_file_id"`
+	CreatedBy            string    `json:"created_by"`
+	CreatedAt            time.Time `json:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
+	MyRole               string    `json:"my_role,omitempty"`
+}
+
+type ProjectListResponse struct {
+	Projects []ProjectResponse `json:"projects"`
+}
+
+type AddProjectMemberRequest struct {
+	UserID   string `json:"user_id"`
+	Username string `json:"username"`
+	Role     string `json:"role" binding:"required"`
+}
+
+type UpdateProjectMemberRoleRequest struct {
+	Role string `json:"role" binding:"required"`
+}
+
+type ProjectMemberResponse struct {
+	ID          string    `json:"id"`
+	ProjectID   string    `json:"project_id"`
+	UserID      string    `json:"user_id"`
+	Username    string    `json:"username,omitempty"`
+	DisplayName string    `json:"display_name,omitempty"`
+	Role        string    `json:"role"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+type ProjectMemberListResponse struct {
+	Members []ProjectMemberResponse `json:"members"`
+}
+
+type UserSearchItem struct {
+	ID          string `json:"id"`
+	Username    string `json:"username"`
+	DisplayName string `json:"display_name"`
+}
+
+type UserSearchResponse struct {
+	Users []UserSearchItem `json:"users"`
+}
