@@ -1,8 +1,10 @@
-/data/
 /bin/
-*.db
 *.db-shm
 *.db-wal
 .DS_Store
 .env
 *.zip
+*credential*
+*secret*
+*.pem
+*.key

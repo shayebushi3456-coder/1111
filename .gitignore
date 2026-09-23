@@ -2,14 +2,15 @@
 *.zip
 tasks-db.zip
 
-task-pilot/data/
 task-pilot/bin/
-task-pilot/*.db
 task-pilot/*.db-shm
 task-pilot/*.db-wal
-task-pilot/data/*.db
-task-pilot/data/*.db-*
+task-pilot/data/*.db-shm
+task-pilot/data/*.db-wal
 task-pilot/.env
+task-pilot/**/.env
+task-pilot/**/*credential*
+task-pilot/**/*secret*
 
 task-pilot-web/node_modules/
 task-pilot-web/dist/
